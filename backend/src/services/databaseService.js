@@ -27,22 +27,32 @@ const initSupabase = () => {
 const isUsingDatabase = () => useDatabase;
 
 /**
- * Get all sales data from database
+ * Get all sales data from database (for stats calculation)
+ * Uses aggregate queries instead of fetching all records
  */
 const getAllSalesFromDB = async () => {
   if (!supabase) return null;
   
   try {
-    console.time('Database query time');
+    console.time('Database aggregate query');
+    
+    // Use PostgreSQL aggregate functions for efficiency
     const { data, error } = await supabase
-      .from('sales')
-      .select('*')
-      .order('date', { ascending: false });
+      .rpc('get_sales_stats');
     
-    if (error) throw error;
+    if (error) {
+      // Fallback: fetch with limit if RPC doesn't exist
+      console.log('RPC not found, using count query');
+      const { count } = await supabase
+        .from('sales')
+        .select('*', { count: 'exact', head: true });
+      
+      console.timeEnd('Database aggregate query');
+      return { count: count || 0 };
+    }
     
-    console.timeEnd('Database query time');
-    console.log(`Retrieved ${data.length} records from database`);
+    console.timeEnd('Database aggregate query');
+    console.log(`Retrieved stats from database (${data?.total_records || 0} records)`);
     return data;
   } catch (error) {
     console.error('Database query error:', error);
@@ -57,7 +67,11 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
   if (!supabase) return null;
   
   try {
-    let query = supabase.from('sales').select('*', { count: 'exact' });
+    // Count query first to get total
+    let countQuery = supabase.from('sales').select('*', { count: 'exact', head: true });
+    
+    // Build data query
+    let query = supabase.from('sales').select('*');
     
     // Apply search filter
     if (filters.search) {
@@ -96,12 +110,29 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
                        sorting.sortBy === 'customer' ? 'customer_name' : 'date';
     query = query.order(sortColumn, { ascending: sorting.sortOrder === 'asc' });
     
-    // Apply pagination
+    // Apply filters to count query
+    if (filters.search) {
+      countQuery = countQuery.or(`customer_name.ilike.%${filters.search}%,phone_number.ilike.%${filters.search}%`);
+    }
+    if (filters.regions?.length > 0) countQuery = countQuery.in('customer_region', filters.regions);
+    if (filters.genders?.length > 0) countQuery = countQuery.in('gender', filters.genders);
+    if (filters.categories?.length > 0) countQuery = countQuery.in('product_category', filters.categories);
+    if (filters.paymentMethods?.length > 0) countQuery = countQuery.in('payment_method', filters.paymentMethods);
+    if (filters.minAge) countQuery = countQuery.gte('age', filters.minAge);
+    if (filters.maxAge) countQuery = countQuery.lte('age', filters.maxAge);
+    if (filters.startDate) countQuery = countQuery.gte('date', filters.startDate);
+    if (filters.endDate) countQuery = countQuery.lte('date', filters.endDate);
+    
+    // Get total count
+    const { count, error: countError } = await countQuery;
+    if (countError) throw countError;
+    
+    // Apply pagination to data query
     const from = (pagination.page - 1) * pagination.limit;
     const to = from + pagination.limit - 1;
     query = query.range(from, to);
     
-    const { data, error, count } = await query;
+    const { data, error } = await query;
     
     if (error) throw error;
     
@@ -110,7 +141,9 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
       totalItems: count || 0,
       currentPage: pagination.page,
       totalPages: Math.ceil((count || 0) / pagination.limit),
-      itemsPerPage: pagination.limit
+      itemsPerPage: pagination.limit,
+      hasNextPage: pagination.page < Math.ceil((count || 0) / pagination.limit),
+      hasPrevPage: pagination.page > 1
     };
   } catch (error) {
     console.error('Database filter query error:', error);

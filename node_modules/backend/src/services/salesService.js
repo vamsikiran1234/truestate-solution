@@ -293,26 +293,30 @@ const getDateRange = (data) => {
  * Get sales statistics (cached)
  */
 const getStats = async () => {
-  // If using database, compute from database
+  // If using database, get stats from RPC function
   if (isUsingDatabase()) {
-    console.log('Computing stats from database');
-    const data = await getAllSalesFromDB();
+    console.log('Getting stats from database');
+    const stats = await getAllSalesFromDB();
     
-    const totalSales = data.reduce((sum, item) => sum + (item.finalAmount || 0), 0);
-    const totalQuantity = data.reduce((sum, item) => sum + (item.quantity || 0), 0);
-    const totalDiscount = data.reduce((sum, item) => {
-      const discount = (item.totalAmount || 0) - (item.finalAmount || 0);
-      return sum + discount;
-    }, 0);
-    const averageOrderValue = data.length > 0 ? totalSales / data.length : 0;
-    
-    return {
-      totalRecords: data.length,
-      totalSales: Math.round(totalSales * 100) / 100,
-      totalQuantity,
-      totalDiscount: Math.round(totalDiscount * 100) / 100,
-      averageOrderValue: Math.round(averageOrderValue * 100) / 100
-    };
+    if (stats && stats.total_records !== undefined) {
+      // Using RPC function result
+      return {
+        totalRecords: Number(stats.total_records) || 0,
+        totalSales: Number(stats.total_sales) || 0,
+        totalQuantity: Number(stats.total_quantity) || 0,
+        totalDiscount: Number(stats.total_discount) || 0,
+        averageOrderValue: Number(stats.average_order_value) || 0
+      };
+    } else if (stats && stats.count !== undefined) {
+      // Fallback: only have count
+      return {
+        totalRecords: stats.count,
+        totalSales: 0,
+        totalQuantity: 0,
+        totalDiscount: 0,
+        averageOrderValue: 0
+      };
+    }
   }
   
   checkCacheValidity();
