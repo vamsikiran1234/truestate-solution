@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import '../styles/ExportButton.css';
 
+// API base URL for export
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+
 function ExportButton({ filters, sorting }) {
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -48,7 +51,7 @@ function ExportButton({ filters, sorting }) {
       params.append('sortBy', sorting.sortBy);
       params.append('sortOrder', sorting.sortOrder);
       
-      const exportUrl = `/api/sales/export?${params.toString()}`;
+      const exportUrl = `${API_BASE_URL}/sales/export?${params.toString()}`;
       console.log('Export URL:', exportUrl);
       
       setProgress(10); // Starting request

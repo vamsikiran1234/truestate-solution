@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Backend API for Retail Sales Management System",
   "main": "src/index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "node --max-old-space-size=4096 src/index.js",
     "dev": "nodemon --max-old-space-size=4096 src/index.js"
