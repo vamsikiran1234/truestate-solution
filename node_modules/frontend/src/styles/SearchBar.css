@@ -1,0 +1,70 @@
+/* Search Bar - Minimal Professional Design */
+.search-bar {
+  width: 300px;
+}
+
+.search-input-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-icon {
+  position: absolute;
+  left: 12px;
+  color: #9ca3af;
+  pointer-events: none;
+}
+
+.search-input {
+  width: 100%;
+  padding: 9px 40px 9px 40px;
+  font-size: 14px;
+  font-weight: 400;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #F3F3F3;
+  color: #1f2937;
+  transition: all 0.15s ease;
+}
+
+.search-input:hover {
+  border-color: #d1d5db;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: #9ca3af;
+  background: #ffffff;
+}
+
+.search-input::placeholder {
+  color: #9ca3af;
+}
+
+.clear-button {
+  position: absolute;
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #e5e7eb;
+  border: none;
+  color: #6b7280;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.clear-button:hover {
+  background: #d1d5db;
+  color: #374151;
+}
+
+@media (max-width: 768px) {
+  .search-bar {
+    width: 100%;
+  }
+}

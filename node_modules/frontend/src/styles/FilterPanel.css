@@ -1,0 +1,130 @@
+/* Filter Panel Styles */
+.filter-panel {
+  background: var(--white);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--gray-100);
+  margin-bottom: var(--spacing-5);
+  overflow: hidden;
+  transition: box-shadow var(--transition-normal);
+}
+
+.filter-panel:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.filter-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-4) var(--spacing-6);
+  background: linear-gradient(to right, var(--gray-50), var(--white));
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.filter-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  background: none;
+  border: none;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--gray-700);
+  cursor: pointer;
+  padding: var(--spacing-2) var(--spacing-4);
+  border-radius: var(--radius-xl);
+  transition: all var(--transition-fast);
+}
+
+.filter-toggle:hover {
+  background: var(--primary-lighter);
+  color: var(--primary-color);
+}
+
+.filter-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--primary-color);
+}
+
+.active-badge {
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+  color: var(--white);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  box-shadow: 0 2px 6px rgba(124, 58, 237, 0.3);
+}
+
+.arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gray-400);
+  transition: transform var(--transition-normal);
+}
+
+.arrow.expanded {
+  transform: rotate(180deg);
+}
+
+.clear-filters-btn {
+  background: var(--error-light);
+  color: var(--error-color);
+  border: none;
+  padding: var(--spacing-2) var(--spacing-5);
+  border-radius: var(--radius-xl);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.clear-filters-btn:hover {
+  background: var(--error-color);
+  color: var(--white);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
+}
+
+.filter-content {
+  padding: var(--spacing-6);
+  background: var(--gray-50);
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--spacing-5);
+}
+
+.filter-loading {
+  padding: var(--spacing-8);
+  text-align: center;
+  color: var(--gray-400);
+  font-size: var(--font-size-sm);
+}
+
+@media (max-width: 768px) {
+  .filter-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  
+  .filter-content {
+    padding: var(--spacing-4);
+  }
+  
+  .filter-header {
+    padding: var(--spacing-3) var(--spacing-4);
+  }
+}
+
+@media (max-width: 480px) {
+  .filter-grid {
+    grid-template-columns: 1fr;
+  }
+}

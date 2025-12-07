@@ -1,0 +1,56 @@
+/* Stats Cards - Compact Design */
+.stats-cards {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.stat-card {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 10px 14px;
+  min-width: 120px;
+}
+
+.stat-card.highlight {
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
+
+.stat-header {
+  margin-bottom: 4px;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: #6b7280;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.stat-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.stat-subtext {
+  font-size: 10px;
+  font-weight: 400;
+  color: #9ca3af;
+  margin-top: 2px;
+}
+
+@media (max-width: 768px) {
+  .stats-cards {
+    flex-wrap: wrap;
+  }
+  
+  .stat-card {
+    flex: 1 1 calc(50% - 6px);
+    min-width: 100px;
+  }
+}
