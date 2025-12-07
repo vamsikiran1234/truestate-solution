@@ -93,10 +93,15 @@ Optimized for **1,000,000 records** with enterprise-grade performance:
 - **CSS3** - Custom styling (no frameworks)
 
 ### Backend
-- **Node.js 16+** - Runtime environment
+- **Node.js 18+** - Runtime environment
 - **Express.js** - Web framework
+- **Supabase** - PostgreSQL database (production)
 - **CSV Parser** - Streaming data parsing
 - **Morgan** - HTTP request logging
+
+### Database
+- **Supabase PostgreSQL** - Production database (free 500MB tier)
+- **CSV File** - Development fallback (in-memory)
 
 ---
 
@@ -119,15 +124,15 @@ Optimized for **1,000,000 records** with enterprise-grade performance:
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Node.js 16+ installed
+- Node.js 18+ installed
 - npm or yarn package manager
 
 ### Installation
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd truestate-retail-sales
+git clone https://github.com/vamsikiran1234/truestate-solution.git
+cd "truestate solution"
 
 # Install all dependencies
 npm install
@@ -136,25 +141,74 @@ cd ../frontend && npm install
 cd ..
 ```
 
-### Running the Application
+### Running Locally (CSV Mode)
 
 ```bash
-# Terminal 1: Start Backend (with memory allocation for 1M records)
+# Terminal 1: Start Backend (uses CSV file)
 cd backend
-node --max-old-space-size=4096 src/index.js
+npm start
+
+# The backend will load 1M records from CSV (takes ~8 seconds)
+# Runs on http://localhost:5000
 
 # Terminal 2: Start Frontend
 cd frontend
 npm run dev
+
+# Runs on http://localhost:5173
 ```
 
-Open http://localhost:3000 in your browser.
+Open http://localhost:5173 in your browser.
 
-**Note:** First load takes ~16 seconds as the backend:
-- Loads 1M records from CSV (~2s)
-- Pre-sorts data by date (~6.7s)
-- Builds search index (~7.5s)
-- Pre-computes filter options (~1s)
+**Note:** First load takes ~8 seconds as the backend loads and indexes 1M records from CSV.
+
+### Running with Supabase (Production Mode)
+
+For production deployment with Supabase PostgreSQL:
+
+1. Follow the [Supabase Migration Guide](docs/SUPABASE_MIGRATION.md)
+2. Set environment variables:
+   ```bash
+   # Create backend/.env
+   SUPABASE_URL=https://your-project.supabase.co
+   SUPABASE_KEY=your-anon-key
+   ```
+3. Start the backend:
+   ```bash
+   cd backend
+   npm start
+   ```
+
+The backend automatically detects Supabase credentials and uses PostgreSQL instead of CSV.
+
+---
+
+## 🌐 Deployment
+
+### Backend (Render)
+
+1. Create new **Web Service** on Render
+2. Connect your GitHub repository
+3. Configure:
+   - **Root Directory:** `backend`
+   - **Build Command:** `npm install`
+   - **Start Command:** `npm start`
+   - **Environment Variables:**
+     - `SUPABASE_URL`: Your Supabase project URL
+     - `SUPABASE_KEY`: Your Supabase anon key
+4. Deploy!
+
+### Frontend (Vercel)
+
+1. Import project on Vercel
+2. Configure:
+   - **Root Directory:** `frontend`
+   - **Framework:** Vite
+   - **Build Command:** `npm run build`
+   - **Output Directory:** `dist`
+3. Deploy!
+
+**Important:** See [Supabase Migration Guide](docs/SUPABASE_MIGRATION.md) for complete deployment instructions including database setup.
 
 ---
 

@@ -59,7 +59,7 @@ const getSales = async (req, res) => {
       console.log(`Large export requested: limit=${pagination.limit}`);
     }
 
-    const result = salesService.getSalesData(filters, sorting, pagination);
+    const result = await salesService.getSalesData(filters, sorting, pagination);
 
     // Log result size for debugging
     if (pagination.limit > 1000) {
@@ -93,7 +93,7 @@ const getSales = async (req, res) => {
  */
 const getFilterOptions = async (req, res) => {
   try {
-    const options = salesService.getFilterOptions();
+    const options = await salesService.getFilterOptions();
     res.json({
       success: true,
       data: options
@@ -113,7 +113,7 @@ const getFilterOptions = async (req, res) => {
  */
 const getStats = async (req, res) => {
   try {
-    const stats = salesService.getStats();
+    const stats = await salesService.getStats();
     res.json({
       success: true,
       data: stats
@@ -159,7 +159,7 @@ const getFilteredStats = async (req, res) => {
       endDate: endDate || null
     };
 
-    const stats = salesService.getFilteredStats(filters);
+    const stats = await salesService.getFilteredStats(filters);
     res.json({
       success: true,
       data: stats

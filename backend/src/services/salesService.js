@@ -1,4 +1,5 @@
 const { getSalesData, getPrecomputedFilterOptions } = require('./dataService');
+const { isUsingDatabase, getFilteredSalesFromDB, getFilterOptionsFromDB, getAllSalesFromDB } = require('./databaseService');
 const { 
   applySearch, 
   applyFilters, 
@@ -50,9 +51,16 @@ const hasActiveFilters = (filters) => {
 
 /**
  * Get filtered, sorted, and paginated sales data
- * OPTIMIZED: Added timing logs and efficient sorting
+ * OPTIMIZED: Uses database when available, otherwise falls back to CSV
  */
-const getSalesDataFiltered = (filters, sorting, pagination) => {
+const getSalesDataFiltered = async (filters, sorting, pagination) => {
+  // If using database, delegate to database service
+  if (isUsingDatabase()) {
+    console.log('Using database query');
+    return await getFilteredSalesFromDB(filters, sorting, pagination);
+  }
+  
+  // Otherwise use CSV in-memory processing
   console.time('Total query time');
   
   let data = getSalesData();
@@ -175,7 +183,13 @@ const getCompareFn = (sortBy, sortOrder) => {
 /**
  * Get available filter options from the dataset (uses precomputed values from startup)
  */
-const getFilterOptions = () => {
+const getFilterOptions = async () => {
+  // If using database, get from database
+  if (isUsingDatabase()) {
+    console.log('Getting filter options from database');
+    return await getFilterOptionsFromDB();
+  }
+  
   // Use precomputed filter options from data load (instant)
   const precomputed = getPrecomputedFilterOptions();
   if (precomputed) {
@@ -278,7 +292,29 @@ const getDateRange = (data) => {
 /**
  * Get sales statistics (cached)
  */
-const getStats = () => {
+const getStats = async () => {
+  // If using database, compute from database
+  if (isUsingDatabase()) {
+    console.log('Computing stats from database');
+    const data = await getAllSalesFromDB();
+    
+    const totalSales = data.reduce((sum, item) => sum + (item.finalAmount || 0), 0);
+    const totalQuantity = data.reduce((sum, item) => sum + (item.quantity || 0), 0);
+    const totalDiscount = data.reduce((sum, item) => {
+      const discount = (item.totalAmount || 0) - (item.finalAmount || 0);
+      return sum + discount;
+    }, 0);
+    const averageOrderValue = data.length > 0 ? totalSales / data.length : 0;
+    
+    return {
+      totalRecords: data.length,
+      totalSales: Math.round(totalSales * 100) / 100,
+      totalQuantity,
+      totalDiscount: Math.round(totalDiscount * 100) / 100,
+      averageOrderValue: Math.round(averageOrderValue * 100) / 100
+    };
+  }
+  
   checkCacheValidity();
   
   if (statsCache) {
@@ -310,7 +346,31 @@ const getStats = () => {
 /**
  * Get filtered statistics (computes stats for filtered data)
  */
-const getFilteredStats = (filters) => {
+const getFilteredStats = async (filters) => {
+  // If using database, fetch filtered data and compute stats
+  if (isUsingDatabase()) {
+    console.log('Computing filtered stats from database');
+    // Get all matching records without pagination
+    const result = await getFilteredSalesFromDB(filters, { sortBy: 'date', sortOrder: 'desc' }, { page: 1, limit: 1000000 });
+    const data = result.data;
+    
+    const totalSales = data.reduce((sum, item) => sum + (item.finalAmount || 0), 0);
+    const totalQuantity = data.reduce((sum, item) => sum + (item.quantity || 0), 0);
+    const totalDiscount = data.reduce((sum, item) => {
+      const discount = (item.totalAmount || 0) - (item.finalAmount || 0);
+      return sum + discount;
+    }, 0);
+    const averageOrderValue = data.length > 0 ? totalSales / data.length : 0;
+    
+    return {
+      totalRecords: data.length,
+      totalSales: Math.round(totalSales * 100) / 100,
+      totalQuantity,
+      totalDiscount: Math.round(totalDiscount * 100) / 100,
+      averageOrderValue: Math.round(averageOrderValue * 100) / 100
+    };
+  }
+  
   let data = getSalesData();
   
   // Apply search if present
