@@ -174,9 +174,135 @@ const getFilteredStats = async (req, res) => {
   }
 };
 
+/**
+ * Export sales data as CSV (streaming for large datasets)
+ */
+const exportSales = async (req, res) => {
+  try {
+    const {
+      search = '',
+      regions = '',
+      genders = '',
+      minAge = '',
+      maxAge = '',
+      categories = '',
+      tags = '',
+      paymentMethods = '',
+      startDate = '',
+      endDate = '',
+      sortBy = 'date',
+      sortOrder = 'desc'
+    } = req.query;
+
+    const filters = {
+      search: search.trim(),
+      regions: regions ? regions.split(',').map(r => r.trim()) : [],
+      genders: genders ? genders.split(',').map(g => g.trim()) : [],
+      minAge: minAge ? parseInt(minAge, 10) : null,
+      maxAge: maxAge ? parseInt(maxAge, 10) : null,
+      categories: categories ? categories.split(',').map(c => c.trim()) : [],
+      tags: tags ? tags.split(',').map(t => t.trim()) : [],
+      paymentMethods: paymentMethods ? paymentMethods.split(',').map(p => p.trim()) : [],
+      startDate: startDate || null,
+      endDate: endDate || null
+    };
+
+    const sorting = {
+      sortBy,
+      sortOrder: sortOrder.toLowerCase() === 'asc' ? 'asc' : 'desc'
+    };
+
+    // Get all data (no pagination for export)
+    const pagination = { page: 1, limit: 1000000 };
+    
+    console.log('Starting CSV export...');
+    console.time('Export time');
+    
+    const result = salesService.getSalesData(filters, sorting, pagination);
+    
+    console.log(`Exporting ${result.data.length} records as CSV`);
+
+    // Set headers for CSV download
+    const filename = `sales_export_${new Date().toISOString().split('T')[0]}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    // Write CSV header
+    const headers = [
+      'Date', 'Customer Name', 'Phone Number', 'Age', 'Gender', 'Region',
+      'Product Name', 'Brand', 'Category', 'Quantity', 'Unit Price',
+      'Discount %', 'Final Amount', 'Payment Method', 'Status', 'Tags'
+    ];
+    res.write(headers.join(',') + '\n');
+
+    // Helper function to format date
+    const formatDate = (dateStr) => {
+      if (!dateStr) return '';
+      try {
+        const date = new Date(dateStr);
+        if (isNaN(date.getTime())) return '';
+        const day = String(date.getDate()).padStart(2, '0');
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const month = monthNames[date.getMonth()];
+        const year = date.getFullYear();
+        return `${day}-${month}-${year}`;
+      } catch {
+        return '';
+      }
+    };
+
+    // Helper to escape CSV values
+    const escapeCSV = (val) => {
+      const str = String(val ?? '');
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    // Write data in chunks to avoid memory issues
+    const chunkSize = 10000;
+    for (let i = 0; i < result.data.length; i += chunkSize) {
+      const chunk = result.data.slice(i, i + chunkSize);
+      const lines = chunk.map(item => [
+        escapeCSV(formatDate(item.date)),
+        escapeCSV(item.customerName),
+        escapeCSV("'" + (item.phoneNumber || '')), // Apostrophe for Excel text
+        escapeCSV(item.age),
+        escapeCSV(item.gender),
+        escapeCSV(item.customerRegion),
+        escapeCSV(item.productName),
+        escapeCSV(item.brand),
+        escapeCSV(item.productCategory),
+        escapeCSV(item.quantity),
+        escapeCSV(item.pricePerUnit),
+        escapeCSV(item.discountPercentage),
+        escapeCSV(item.finalAmount),
+        escapeCSV(item.paymentMethod),
+        escapeCSV(item.orderStatus),
+        escapeCSV(item.tags)
+      ].join(',')).join('\n');
+      
+      res.write(lines + '\n');
+    }
+
+    console.timeEnd('Export time');
+    res.end();
+    
+  } catch (error) {
+    console.error('Error exporting sales:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to export sales data',
+      message: error.message
+    });
+  }
+};
+
 module.exports = {
   getSales,
   getFilterOptions,
   getStats,
-  getFilteredStats
+  getFilteredStats,
+  exportSales
 };

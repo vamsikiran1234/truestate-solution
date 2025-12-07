@@ -5,6 +5,9 @@ const salesController = require('../controllers/salesController');
 // GET /api/sales - Get paginated sales with search, filter, sort
 router.get('/', salesController.getSales);
 
+// GET /api/sales/export - Export all filtered data as CSV (streaming)
+router.get('/export', salesController.exportSales);
+
 // GET /api/sales/filters - Get available filter options
 router.get('/filters', salesController.getFilterOptions);
 

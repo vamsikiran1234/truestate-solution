@@ -38,10 +38,6 @@
   --bg-primary: #f9fafb;
   --bg-secondary: #ffffff;
   
-  /* Sidebar */
-  --sidebar-bg: #1a1d29;
-  --sidebar-text: #8b8d97;
-  
   /* Typography */
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
