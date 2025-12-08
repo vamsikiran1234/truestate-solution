@@ -341,46 +341,57 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
         }
       }
       
-      // Try 4: Direct sales table query (slower but works without setup)
-      if (!matchingIds) {
-        try {
-          console.log('[DB] Using direct sales table search (fallback)');
-          const phoneDigits = searchTerm.replace(/\D/g, '');
-          const searchPattern = `${searchTerm}%`;
-          const phonePattern = phoneDigits.length >= 3 ? `%${phoneDigits}%` : null;
-          
-          let directQuery = supabase
-            .from('sales')
-            .select('id');
-          
-          // Search by customer_name (case-insensitive) or phone
-          if (phonePattern) {
-            directQuery = directQuery.or(`customer_name.ilike.${searchPattern},phone_number.ilike.${phonePattern}`);
-          } else {
-            directQuery = directQuery.ilike('customer_name', searchPattern);
-          }
-          
-          const { data: directData, error: directError } = await directQuery.limit(200);
-          
-          if (!directError && directData && directData.length > 0) {
-            matchingIds = directData.map(r => r.id);
-            console.log(`[DB] Direct search found ${matchingIds.length} matches`);
-          } else if (directError) {
-            console.log('[DB] Direct search failed:', directError.message);
-          }
-        } catch (e) {
-          console.log('[DB] Direct search failed:', e.message);
-        }
-      }
-      
-      // Try 3: In-memory cache
+      // Try 3: In-memory cache (should be available quickly)
       if (!matchingIds) {
         const cacheStatus = searchCache.getStatus();
         if (cacheStatus.isReady) {
           matchingIds = searchCache.search(searchTerm, 500);
-          if (matchingIds) {
+          if (matchingIds && matchingIds.length > 0) {
             console.log(`[DB] Cache found ${matchingIds.length} matches`);
           }
+        } else {
+          console.log(`[DB] Cache not ready yet. Status: ${cacheStatus.isLoading ? 'loading' : 'not started'}`);
+        }
+      }
+      
+      // Try 4: Direct sales table query (only if cache is not ready - use with AbortController)
+      if (!matchingIds) {
+        try {
+          console.log('[DB] Using direct sales table search (fallback with 10s timeout)');
+          const phoneDigits = searchTerm.replace(/\D/g, '');
+          const searchPattern = `${searchTerm}%`;
+          
+          // Use AbortController for timeout
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+          
+          try {
+            let directQuery = supabase
+              .from('sales')
+              .select('id')
+              .ilike('customer_name', searchPattern)
+              .order('id')  // Use indexed column for ORDER
+              .limit(100);  // Only get first 100 matches
+            
+            const { data: directData, error: directError } = await directQuery;
+            clearTimeout(timeoutId);
+            
+            if (!directError && directData && directData.length > 0) {
+              matchingIds = directData.map(r => r.id);
+              console.log(`[DB] Direct search found ${matchingIds.length} matches`);
+            } else if (directError) {
+              console.log('[DB] Direct search failed:', directError.message);
+            }
+          } catch (e) {
+            clearTimeout(timeoutId);
+            if (e.name === 'AbortError') {
+              console.log('[DB] Direct search timed out after 10s');
+            } else {
+              throw e;
+            }
+          }
+        } catch (e) {
+          console.log('[DB] Direct search failed:', e.message);
         }
       }
       
