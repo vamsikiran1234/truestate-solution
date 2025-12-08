@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { searchCache } = require('../utils/searchCache');
 
 // Supabase configuration
 const supabaseUrl = process.env.SUPABASE_URL || '';
@@ -45,6 +46,15 @@ const initSupabase = () => {
     supabase = createClient(supabaseUrl, supabaseKey);
     useDatabase = true;
     console.log('✓ Supabase database connected');
+    
+    // Build search cache in background (non-blocking)
+    // This loads customer names into memory for fast search
+    setTimeout(() => {
+      searchCache.build(supabaseUrl, supabaseKey).catch(err => {
+        console.error('Failed to build search cache:', err.message);
+      });
+    }, 1000); // Delay 1s to let server start first
+    
     return true;
   }
   console.log('ℹ Using CSV file (no Supabase credentials)');
@@ -271,14 +281,61 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
     
     console.log('[DB] hasFilters:', hasFilters, '| activeFilterCount:', activeFilterCount);
     
-    // OPTIMIZATION: For search-only queries, use fast path with limited results
-    const isSearchOnly = filters.search && filters.search.length >= 3 && activeFilterCount === 1;
+    // OPTIMIZATION: For search-only queries, use in-memory cache if available
+    const isSearchOnly = filters.search && filters.search.length >= 2 && activeFilterCount === 1;
     
     if (isSearchOnly) {
       console.log('[DB] Using fast search path (search only, no other filters)');
       const searchTerm = filters.search.trim();
       
-      // Fast path: Simple prefix search with hard limit
+      // Try in-memory search cache first (instant!)
+      const cacheStatus = searchCache.getStatus();
+      if (cacheStatus.isReady) {
+        console.log('[DB] Using in-memory search cache');
+        const matchingIds = searchCache.search(searchTerm, 100);
+        
+        if (matchingIds && matchingIds.length > 0) {
+          // Fetch full records for matching IDs
+          const { data: searchData, error: searchError } = await supabase
+            .from('sales')
+            .select('*')
+            .in('id', matchingIds)
+            .order('date', { ascending: false });
+          
+          if (!searchError && searchData) {
+            const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
+            console.log(`[DB] Cache search completed: ${queryTime}s, ${searchData.length} records`);
+            
+            return {
+              data: transformRows(searchData) || [],
+              totalItems: searchData.length,
+              currentPage: 1,
+              totalPages: 1,
+              itemsPerPage: 100,
+              hasNextPage: false,
+              hasPrevPage: false,
+              searchLimited: true
+            };
+          }
+        } else if (matchingIds && matchingIds.length === 0) {
+          // Cache returned no results
+          const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
+          console.log(`[DB] Cache search completed: ${queryTime}s, 0 records`);
+          return {
+            data: [],
+            totalItems: 0,
+            currentPage: 1,
+            totalPages: 0,
+            itemsPerPage: 100,
+            hasNextPage: false,
+            hasPrevPage: false,
+            searchLimited: true
+          };
+        }
+      }
+      
+      // Fallback: Simple prefix search with hard limit (if cache not ready)
+      console.log('[DB] Cache not ready, using database prefix search');
       let query = supabase.from('sales').select('*');
       query = query.ilike('customer_name', `${searchTerm}%`);
       query = query.order('date', { ascending: false });
@@ -746,11 +803,19 @@ const exportSalesFromDB = async (filters, sorting, onBatch) => {
   }
 };
 
+/**
+ * Get search cache status
+ */
+const getSearchCacheStatus = () => {
+  return searchCache.getStatus();
+};
+
 module.exports = {
   initSupabase,
   isUsingDatabase,
   getAllSalesFromDB,
   getFilteredSalesFromDB,
   getFilterOptionsFromDB,
-  exportSalesFromDB
+  exportSalesFromDB,
+  getSearchCacheStatus
 };

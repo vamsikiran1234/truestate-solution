@@ -28,14 +28,13 @@ function SearchBar({ value, onSearch }) {
       clearTimeout(timeoutRef.current);
     }
     
-    // Only search if input is empty (clear) or has 3+ characters
-    // This prevents slow queries with very short search terms
-    if (newValue.length === 0 || newValue.length >= 3) {
-      // Debounce the search - wait 800ms after user stops typing
-      // Increased from 500ms to reduce unnecessary queries and timeouts
+    // Only search if input is empty (clear) or has 2+ characters
+    // 2 chars is enough for prefix matching with in-memory cache
+    if (newValue.length === 0 || newValue.length >= 2) {
+      // Debounce the search - wait 500ms after user stops typing
       timeoutRef.current = setTimeout(() => {
         onSearch(newValue);
-      }, 800);
+      }, 500);
     }
   };
 
@@ -67,7 +66,7 @@ function SearchBar({ value, onSearch }) {
         <input
           type="text"
           className="search-input"
-          placeholder="Search name or phone (min 3 chars)"
+          placeholder="Search name (min 2 chars)"
           value={inputValue}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
