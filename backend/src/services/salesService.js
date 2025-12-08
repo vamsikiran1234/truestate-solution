@@ -1,5 +1,5 @@
 const { getSalesData, getPrecomputedFilterOptions } = require('./dataService');
-const { isUsingDatabase, getFilteredSalesFromDB, getFilterOptionsFromDB, getAllSalesFromDB } = require('./databaseService');
+const { isUsingDatabase, getFilteredSalesFromDB, getFilterOptionsFromDB, getAllSalesFromDB, exportSalesFromDB } = require('./databaseService');
 const { 
   applySearch, 
   applyFilters, 
@@ -54,9 +54,13 @@ const hasActiveFilters = (filters) => {
  * OPTIMIZED: Uses database when available, otherwise falls back to CSV
  */
 const getSalesDataFiltered = async (filters, sorting, pagination) => {
+  // Debug log
+  console.log('[SalesService] getSalesDataFiltered called');
+  console.log('[SalesService] Filters received:', JSON.stringify(filters));
+  
   // If using database, delegate to database service
   if (isUsingDatabase()) {
-    console.log('Using database query');
+    console.log('[SalesService] Delegating to database query');
     return await getFilteredSalesFromDB(filters, sorting, pagination);
   }
   
@@ -403,10 +407,53 @@ const getFilteredStats = async (filters) => {
   };
 };
 
+/**
+ * Export all sales data (streaming for large datasets)
+ * @param {Object} filters - Filter criteria
+ * @param {Object} sorting - Sort options
+ * @param {Function} onBatch - Callback for each batch of data
+ * @returns {Promise<number>} Total records exported
+ */
+const exportSalesData = async (filters, sorting, onBatch) => {
+  // If using database, use the dedicated export function
+  if (isUsingDatabase()) {
+    console.log('Exporting from database with streaming');
+    return await exportSalesFromDB(filters, sorting, onBatch);
+  }
+  
+  // Otherwise use CSV in-memory processing
+  console.log('Exporting from CSV data');
+  let data = getSalesData();
+  
+  // Apply search
+  if (filters.search) {
+    data = applySearch(data, filters.search);
+  }
+  
+  // Apply filters
+  data = applyFilters(data, filters);
+  
+  // Apply sorting
+  data = applySorting(data, sorting);
+  
+  // Send all data in batches
+  const BATCH_SIZE = 10000;
+  let totalExported = 0;
+  
+  for (let i = 0; i < data.length; i += BATCH_SIZE) {
+    const batch = data.slice(i, i + BATCH_SIZE);
+    await onBatch(batch);
+    totalExported += batch.length;
+  }
+  
+  return totalExported;
+};
+
 module.exports = {
   getSalesData: getSalesDataFiltered,
   getFilterOptions,
   getStats,
   getFilteredStats,
-  invalidateCache
+  invalidateCache,
+  exportSalesData
 };

@@ -1,9 +1,9 @@
 -- ============================================
--- SIMPLE STATS TABLE - NO TIMEOUTS!
--- Run this in Supabase SQL Editor
+-- STEP 2: CREATE STATS TABLE (Run after STEP 1)
+-- This is MUCH faster than RPC function!
 -- ============================================
 
--- Create a simple stats table that stores pre-computed values
+-- Create a table to store pre-computed stats
 CREATE TABLE IF NOT EXISTS sales_stats (
     id INTEGER PRIMARY KEY DEFAULT 1,
     total_records BIGINT,
@@ -14,11 +14,11 @@ CREATE TABLE IF NOT EXISTS sales_stats (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- Compute and insert the stats ONCE (this can run for a while)
--- First, delete any existing row
+-- Delete any existing stats
 DELETE FROM sales_stats WHERE id = 1;
 
--- Now insert the computed stats
+-- Compute and insert the stats
+-- This INSERT might take a while, but only runs once!
 INSERT INTO sales_stats (id, total_records, total_sales, total_quantity, total_discount, average_order_value)
 SELECT 
     1 as id,
@@ -32,7 +32,9 @@ FROM sales;
 -- Verify it worked
 SELECT * FROM sales_stats;
 
--- This should return:
+-- ✅ You should see output like:
 -- total_records: 1000000
--- total_sales: ~5683455355.65
+-- total_sales: 5683455355.65
 -- etc.
+
+-- Now proceed to STEP 3

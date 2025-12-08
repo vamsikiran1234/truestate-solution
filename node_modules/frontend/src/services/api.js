@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-// API base URL - use environment variable for production or /api for local development
+// API base URL - use /api for local development (Vite proxy handles routing)
+// In production, VITE_API_URL should be set to the full backend URL
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 // Create axios instance with base configuration
