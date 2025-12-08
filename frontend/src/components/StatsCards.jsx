@@ -23,18 +23,24 @@ function StatsCards({ filters, totalItems }) {
     const fetchStats = async () => {
       setLoading(true);
       try {
-        // Check if any filters are active
-        const hasFilters = search || regions || genders || categories || 
+        // Check if any filters are active (excluding search - it's too slow for stats)
+        const hasNonSearchFilters = regions || genders || categories || 
                           tags || paymentMethods || minAge || maxAge || 
                           startDate || endDate;
 
         let response;
         
-        if (hasFilters) {
-          // Fetch filtered stats
-          console.log('Fetching filtered stats with:', { search, regions, genders, categories });
+        // OPTIMIZATION: Skip filtered stats when only searching
+        // Search queries are slow on 1M records, and stats aren't critical during search
+        if (search && !hasNonSearchFilters) {
+          // When only searching, use cached global stats (fast)
+          console.log('Search active - using cached stats for speed');
+          response = await salesApi.getStats();
+        } else if (hasNonSearchFilters) {
+          // Fetch filtered stats (but exclude search term to avoid timeout)
+          console.log('Fetching filtered stats with:', { regions, genders, categories });
           response = await salesApi.getFilteredStats({
-            search,
+            // search: '', // Skip search in stats query - too slow
             regions,
             genders,
             minAge,

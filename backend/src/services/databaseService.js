@@ -183,11 +183,11 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
       // Only apply search if it has 3+ characters (faster and more meaningful results)
       if (filters.search && filters.search.length >= 3) {
         console.log('[DB] Adding search filter:', filters.search);
-        // OPTIMIZED: Use prefix matching on customer_name (uses index)
-        // and contains on phone_number (shorter field, faster)
-        const searchTerm = filters.search.trim().toLowerCase();
-        // Prefix search on name is MUCH faster than contains
-        query = query.or(`customer_name.ilike.${searchTerm}%,phone_number.ilike.%${searchTerm}%`);
+        // OPTIMIZED: Use prefix matching ONLY on customer_name (uses trigram index)
+        // This is MUCH faster than contains matching with leading %
+        const searchTerm = filters.search.trim();
+        // Only use prefix matching - contains is too slow on 1M records
+        query = query.ilike('customer_name', `${searchTerm}%`);
       } else if (filters.search && filters.search.length > 0 && filters.search.length < 3) {
         console.log('[DB] Search term too short, skipping:', filters.search);
       }
@@ -270,6 +270,38 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
     ].filter(Boolean).length;
     
     console.log('[DB] hasFilters:', hasFilters, '| activeFilterCount:', activeFilterCount);
+    
+    // OPTIMIZATION: For search-only queries, use fast path with limited results
+    const isSearchOnly = filters.search && filters.search.length >= 3 && activeFilterCount === 1;
+    
+    if (isSearchOnly) {
+      console.log('[DB] Using fast search path (search only, no other filters)');
+      const searchTerm = filters.search.trim();
+      
+      // Fast path: Simple prefix search with hard limit
+      let query = supabase.from('sales').select('*');
+      query = query.ilike('customer_name', `${searchTerm}%`);
+      query = query.order('date', { ascending: false });
+      query = query.limit(100); // Hard limit for fast response
+      
+      const { data: searchData, error: searchError } = await query;
+      
+      if (searchError) throw searchError;
+      
+      const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
+      console.log(`[DB] Fast search completed: ${queryTime}s, ${searchData?.length || 0} records`);
+      
+      return {
+        data: transformRows(searchData) || [],
+        totalItems: searchData?.length || 0,
+        currentPage: 1,
+        totalPages: 1,
+        itemsPerPage: 100,
+        hasNextPage: false,
+        hasPrevPage: false,
+        searchLimited: true // Flag to indicate results are limited
+      };
+    }
     
     // Get total count with filters (use pre-computed stats if no filters)
     let totalCount;
