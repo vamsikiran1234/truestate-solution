@@ -1,9 +1,9 @@
 {
   "version": 2,
   "framework": null,
-  "buildCommand": "ls -la && cd frontend && npm install && npm run build",
-  "outputDirectory": "frontend/dist",
-  "installCommand": "pwd && ls -la",
+  "buildCommand": "cd ../frontend && npm install && npm run build",
+  "outputDirectory": "../frontend/dist",
+  "installCommand": "npm install",
   "routes": [
     {
       "src": "/api/(.*)",
