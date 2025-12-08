@@ -4,10 +4,14 @@ import axios from 'axios';
 // In production, VITE_API_URL should be set to the full backend URL
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
+// Store for cancellation tokens
+let currentSalesRequest = null;
+let currentStatsRequest = null;
+
 // Create axios instance with base configuration
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 60000, // 60 seconds timeout for large dataset
+  timeout: 30000, // Reduced to 30 seconds for faster feedback
   headers: {
     'Content-Type': 'application/json'
   }
@@ -53,8 +57,17 @@ apiClient.interceptors.response.use(
 export const salesApi = {
   /**
    * Get sales data with filters, sorting, and pagination
+   * Automatically cancels previous pending requests
    */
   getSales: async (params) => {
+    // Cancel previous request if still pending
+    if (currentSalesRequest) {
+      currentSalesRequest.cancel('New request initiated');
+    }
+    
+    // Create new cancel token
+    currentSalesRequest = axios.CancelToken.source();
+    
     const queryParams = new URLSearchParams();
     
     Object.entries(params).forEach(([key, value]) => {
@@ -63,7 +76,19 @@ export const salesApi = {
       }
     });
 
-    return apiClient.get(`/sales?${queryParams.toString()}`);
+    try {
+      const result = await apiClient.get(`/sales?${queryParams.toString()}`, {
+        cancelToken: currentSalesRequest.token
+      });
+      currentSalesRequest = null;
+      return result;
+    } catch (error) {
+      if (axios.isCancel(error)) {
+        console.log('[API] Request cancelled:', error.message);
+        throw new Error('Request cancelled');
+      }
+      throw error;
+    }
   },
 
   /**
@@ -82,8 +107,17 @@ export const salesApi = {
 
   /**
    * Get filtered statistics
+   * Automatically cancels previous pending requests
    */
   getFilteredStats: async (params) => {
+    // Cancel previous request if still pending
+    if (currentStatsRequest) {
+      currentStatsRequest.cancel('New request initiated');
+    }
+    
+    // Create new cancel token
+    currentStatsRequest = axios.CancelToken.source();
+    
     const queryParams = new URLSearchParams();
     
     Object.entries(params).forEach(([key, value]) => {
@@ -92,7 +126,19 @@ export const salesApi = {
       }
     });
 
-    return apiClient.get(`/sales/filtered-stats?${queryParams.toString()}`);
+    try {
+      const result = await apiClient.get(`/sales/filtered-stats?${queryParams.toString()}`, {
+        cancelToken: currentStatsRequest.token
+      });
+      currentStatsRequest = null;
+      return result;
+    } catch (error) {
+      if (axios.isCancel(error)) {
+        console.log('[API] Stats request cancelled:', error.message);
+        throw new Error('Request cancelled');
+      }
+      throw error;
+    }
   }
 };
 

@@ -113,6 +113,7 @@ const getAllSalesFromDB = async () => {
 
 /**
  * Get filtered sales data from database
+ * Uses optimized RPC function if available, falls back to direct queries
  */
 const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
   if (!supabase) return null;
@@ -123,6 +124,57 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
   try {
     const startTime = Date.now();
     
+    // Try using RPC function for better performance
+    const useRPC = filters.search && filters.search.length >= 3;
+    
+    if (useRPC) {
+      console.log('[DB] Attempting RPC-based search for better performance...');
+      try {
+        const offset = (pagination.page - 1) * pagination.limit;
+        const sortColumn = sorting.sortBy === 'date' ? 'date' : 
+                          sorting.sortBy === 'amount' ? 'amount' : 
+                          sorting.sortBy === 'customer' ? 'customer' : 'date';
+        
+        const { data: rpcData, error: rpcError } = await supabase.rpc('search_sales_with_filters', {
+          p_search: filters.search.trim(),
+          p_regions: filters.regions?.length > 0 ? filters.regions : null,
+          p_genders: filters.genders?.length > 0 ? filters.genders : null,
+          p_categories: filters.categories?.length > 0 ? filters.categories : null,
+          p_payment_methods: filters.paymentMethods?.length > 0 ? filters.paymentMethods : null,
+          p_min_age: filters.minAge || null,
+          p_max_age: filters.maxAge || null,
+          p_start_date: filters.startDate || null,
+          p_end_date: filters.endDate || null,
+          p_page_offset: offset,
+          p_page_limit: pagination.limit,
+          p_sort_column: sortColumn,
+          p_sort_asc: sorting.sortOrder === 'asc'
+        });
+        
+        if (!rpcError && rpcData && rpcData.length > 0) {
+          const totalCount = rpcData[0]?.total_count || rpcData.length;
+          const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
+          console.log(`[DB] RPC search completed: ${queryTime}s, ${rpcData.length} records, total: ${totalCount}`);
+          
+          return {
+            data: transformRows(rpcData) || [],
+            totalItems: totalCount,
+            currentPage: pagination.page,
+            totalPages: Math.ceil(totalCount / pagination.limit),
+            itemsPerPage: pagination.limit,
+            hasNextPage: pagination.page < Math.ceil(totalCount / pagination.limit),
+            hasPrevPage: pagination.page > 1
+          };
+        }
+        
+        if (rpcError) {
+          console.log('[DB] RPC not available, falling back to direct query:', rpcError.message);
+        }
+      } catch (rpcErr) {
+        console.log('[DB] RPC failed, using direct query:', rpcErr.message);
+      }
+    }
+    
     // Build base filter conditions for both queries
     const applyFilters = (query) => {
       console.log('[DB] Applying filters to query...');
@@ -131,16 +183,11 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
       // Only apply search if it has 3+ characters (faster and more meaningful results)
       if (filters.search && filters.search.length >= 3) {
         console.log('[DB] Adding search filter:', filters.search);
-        // Use prefix matching when possible (faster) - if search is short, use prefix
-        // For longer searches, use contains match
-        const searchTerm = filters.search.trim();
-        if (searchTerm.length <= 5) {
-          // Prefix search is faster for short terms
-          query = query.or(`customer_name.ilike.${searchTerm}%,phone_number.ilike.%${searchTerm}%`);
-        } else {
-          // Contains search for longer terms
-          query = query.or(`customer_name.ilike.%${searchTerm}%,phone_number.ilike.%${searchTerm}%`);
-        }
+        // OPTIMIZED: Use prefix matching on customer_name (uses index)
+        // and contains on phone_number (shorter field, faster)
+        const searchTerm = filters.search.trim().toLowerCase();
+        // Prefix search on name is MUCH faster than contains
+        query = query.or(`customer_name.ilike.${searchTerm}%,phone_number.ilike.%${searchTerm}%`);
       } else if (filters.search && filters.search.length > 0 && filters.search.length < 3) {
         console.log('[DB] Search term too short, skipping:', filters.search);
       }

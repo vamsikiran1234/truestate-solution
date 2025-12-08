@@ -44,6 +44,12 @@ export function useSalesData() {
         throw new Error(response.error || 'Failed to fetch data');
       }
     } catch (err) {
+      // Ignore cancelled requests - a new one is in progress
+      if (err.message === 'Request cancelled') {
+        console.log('Request cancelled, new request in progress');
+        return;
+      }
+      
       console.error('Error fetching sales data:', err);
       // Provide user-friendly error messages
       let errorMessage = err.message || 'An error occurred while fetching data';
