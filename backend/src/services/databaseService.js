@@ -287,111 +287,98 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
     
     // OPTIMIZATION: When search is present, use search_index for fast ID lookup
     if (hasSearch) {
-      console.log('[DB] Search detected, using search_index strategy');
+      console.log('[DB] Search detected, using multi-strategy search');
       const searchTerm = filters.search.trim().toLowerCase();
       
-      // Get matching IDs from search_index (fast!)
+      // Get matching IDs using various strategies
       let matchingIds = null;
       
-      // Try 1: RPC function (fastest)
+      // Try 1: fast_search RPC function (fastest - uses indexed search)
       try {
         const { data: searchIds, error: rpcError } = await supabase
-          .rpc('search_with_ids', { search_term: searchTerm, max_results: 500 });
+          .rpc('fast_search', { search_term: searchTerm, max_results: 200 });
         
         if (!rpcError && searchIds && searchIds.length > 0) {
           matchingIds = searchIds.map(r => r.matching_id);
-          console.log(`[DB] RPC found ${matchingIds.length} matches`);
+          console.log(`[DB] fast_search RPC found ${matchingIds.length} matches`);
         } else if (rpcError) {
-          console.log('[DB] search_with_ids RPC not available:', rpcError.message);
+          console.log('[DB] fast_search RPC not available:', rpcError.message);
         }
       } catch (e) {
-        console.log('[DB] RPC failed:', e.message);
+        console.log('[DB] fast_search RPC failed:', e.message);
       }
       
-      // Try 2: Direct search_index query
+      // Try 2: search_with_ids RPC function (alternative)
       if (!matchingIds) {
         try {
-          const phoneDigits = searchTerm.replace(/\D/g, '');
-          let indexQuery = supabase
-            .from('search_index')
-            .select('id');
+          const { data: searchIds, error: rpcError } = await supabase
+            .rpc('search_with_ids', { search_term: searchTerm, max_results: 200 });
           
-          // Build OR conditions properly for Supabase PostgREST syntax
-          // Format: column.operator.value (no spaces around dots)
-          const searchPattern = `${searchTerm}%`;
-          const containsPattern = `%${searchTerm}%`;
-          
-          if (phoneDigits.length >= 3) {
-            const phonePattern = `%${phoneDigits}%`;
-            indexQuery = indexQuery.or(`first_name.ilike.${searchPattern},name_lower.ilike.${searchPattern},name_lower.ilike.${containsPattern},phone_digits.ilike.${phonePattern}`);
-          } else {
-            indexQuery = indexQuery.or(`first_name.ilike.${searchPattern},name_lower.ilike.${searchPattern},name_lower.ilike.${containsPattern}`);
+          if (!rpcError && searchIds && searchIds.length > 0) {
+            matchingIds = searchIds.map(r => r.matching_id);
+            console.log(`[DB] search_with_ids RPC found ${matchingIds.length} matches`);
+          } else if (rpcError) {
+            console.log('[DB] search_with_ids RPC not available:', rpcError.message);
           }
+        } catch (e) {
+          console.log('[DB] search_with_ids RPC failed:', e.message);
+        }
+      }
+      
+      // Try 3: In-memory cache (instant if loaded)
+      if (!matchingIds) {
+        const cacheStatus = searchCache.getStatus();
+        if (cacheStatus.isReady) {
+          matchingIds = searchCache.search(searchTerm, 200);
+          if (matchingIds && matchingIds.length > 0) {
+            console.log(`[DB] Cache found ${matchingIds.length} matches`);
+          }
+        } else {
+          console.log(`[DB] Cache status: ${cacheStatus.isLoading ? 'loading...' : 'not started'}`);
+        }
+      }
+      
+      // Try 4: Direct search_index table query
+      if (!matchingIds) {
+        try {
+          const searchPattern = `${searchTerm}%`;
+          const { data: indexData, error: indexError } = await supabase
+            .from('search_index')
+            .select('id')
+            .ilike('first_name', searchPattern)
+            .limit(200);
           
-          const { data: indexData, error: indexError } = await indexQuery.limit(500);
-          
-          if (!indexError && indexData) {
+          if (!indexError && indexData && indexData.length > 0) {
             matchingIds = indexData.map(r => r.id);
             console.log(`[DB] search_index found ${matchingIds.length} matches`);
           } else if (indexError) {
-            console.log('[DB] search_index table not available:', indexError.message);
+            console.log('[DB] search_index not available:', indexError.message);
           }
         } catch (e) {
           console.log('[DB] search_index query failed:', e.message);
         }
       }
       
-      // Try 3: In-memory cache (should be available quickly)
-      if (!matchingIds) {
-        const cacheStatus = searchCache.getStatus();
-        if (cacheStatus.isReady) {
-          matchingIds = searchCache.search(searchTerm, 500);
-          if (matchingIds && matchingIds.length > 0) {
-            console.log(`[DB] Cache found ${matchingIds.length} matches`);
-          }
-        } else {
-          console.log(`[DB] Cache not ready yet. Status: ${cacheStatus.isLoading ? 'loading' : 'not started'}`);
-        }
-      }
-      
-      // Try 4: Direct sales table query (only if cache is not ready - use with AbortController)
+      // Try 5: Direct sales table (last resort, limited)
       if (!matchingIds) {
         try {
-          console.log('[DB] Using direct sales table search (fallback with 10s timeout)');
-          const phoneDigits = searchTerm.replace(/\D/g, '');
+          console.log('[DB] Using direct sales query (last resort)');
           const searchPattern = `${searchTerm}%`;
           
-          // Use AbortController for timeout
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+          const { data: directData, error: directError } = await supabase
+            .from('sales')
+            .select('id')
+            .ilike('customer_name', searchPattern)
+            .limit(50);  // Very limited to avoid timeout
           
-          try {
-            let directQuery = supabase
-              .from('sales')
-              .select('id')
-              .ilike('customer_name', searchPattern)
-              .order('id')  // Use indexed column for ORDER
-              .limit(100);  // Only get first 100 matches
-            
-            const { data: directData, error: directError } = await directQuery;
-            clearTimeout(timeoutId);
-            
-            if (!directError && directData && directData.length > 0) {
-              matchingIds = directData.map(r => r.id);
-              console.log(`[DB] Direct search found ${matchingIds.length} matches`);
-            } else if (directError) {
-              console.log('[DB] Direct search failed:', directError.message);
-            }
-          } catch (e) {
-            clearTimeout(timeoutId);
-            if (e.name === 'AbortError') {
-              console.log('[DB] Direct search timed out after 10s');
-            } else {
-              throw e;
-            }
+          if (!directError && directData && directData.length > 0) {
+            matchingIds = directData.map(r => r.id);
+            console.log(`[DB] Direct query found ${matchingIds.length} matches`);
+          } else if (directError) {
+            console.log('[DB] Direct query failed:', directError.message);
           }
         } catch (e) {
-          console.log('[DB] Direct search failed:', e.message);
+          console.log('[DB] Direct query failed:', e.message);
         }
       }
       
