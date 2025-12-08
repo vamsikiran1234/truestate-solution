@@ -128,9 +128,21 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
       console.log('[DB] Applying filters to query...');
       
       // Search - uses OR between multiple fields
-      if (filters.search) {
+      // Only apply search if it has 3+ characters (faster and more meaningful results)
+      if (filters.search && filters.search.length >= 3) {
         console.log('[DB] Adding search filter:', filters.search);
-        query = query.or(`customer_name.ilike.%${filters.search}%,phone_number.ilike.%${filters.search}%`);
+        // Use prefix matching when possible (faster) - if search is short, use prefix
+        // For longer searches, use contains match
+        const searchTerm = filters.search.trim();
+        if (searchTerm.length <= 5) {
+          // Prefix search is faster for short terms
+          query = query.or(`customer_name.ilike.${searchTerm}%,phone_number.ilike.%${searchTerm}%`);
+        } else {
+          // Contains search for longer terms
+          query = query.or(`customer_name.ilike.%${searchTerm}%,phone_number.ilike.%${searchTerm}%`);
+        }
+      } else if (filters.search && filters.search.length > 0 && filters.search.length < 3) {
+        console.log('[DB] Search term too short, skipping:', filters.search);
       }
       
       // All these use AND (chained .in() and comparison operators)
@@ -474,7 +486,7 @@ const getFilterOptionsFromDB = async () => {
 
 /**
  * Export sales data in batches for large CSV exports
- * Uses cursor-based pagination for reliable filtered exports
+ * Uses cursor-based pagination with parallel fetching for speed
  * @param {Object} filters - Filter criteria
  * @param {Object} sorting - Sort options
  * @param {Function} onBatch - Callback function called with each batch of data
@@ -484,6 +496,7 @@ const exportSalesFromDB = async (filters, sorting, onBatch) => {
   if (!supabase) return 0;
   
   const BATCH_SIZE = 1000; // Supabase max per request
+  const PARALLEL_BATCHES = 5; // Fetch 5 batches in parallel for 5x speed
   let totalExported = 0;
   let hasMore = true;
   let lastId = 0;
@@ -554,11 +567,63 @@ const exportSalesFromDB = async (filters, sorting, onBatch) => {
     if (error) throw error;
     return data || [];
   };
+
+  // Fetch multiple batches in parallel using ID ranges
+  const fetchParallelBatches = async (startId, numBatches) => {
+    // First, get IDs at intervals to define ranges for parallel fetching
+    let query = supabase.from('sales').select('id');
+    query = applyFilters(query);
+    query = query.gt('id', startId);
+    query = query.order('id', { ascending: true });
+    query = query.limit(BATCH_SIZE * numBatches);
+    
+    const { data: allIds, error: idsError } = await query;
+    if (idsError) throw idsError;
+    if (!allIds || allIds.length === 0) return [];
+    
+    // Split into chunks and fetch data for each chunk in parallel
+    const chunks = [];
+    for (let i = 0; i < numBatches && i * BATCH_SIZE < allIds.length; i++) {
+      const startIdx = i * BATCH_SIZE;
+      const endIdx = Math.min((i + 1) * BATCH_SIZE, allIds.length);
+      if (startIdx < allIds.length) {
+        const chunkStartId = i === 0 ? startId : allIds[startIdx - 1].id;
+        const chunkEndId = allIds[endIdx - 1]?.id;
+        if (chunkEndId) {
+          chunks.push({ startId: chunkStartId, endId: chunkEndId });
+        }
+      }
+    }
+    
+    // Fetch all chunks in parallel
+    const batchPromises = chunks.map(async (chunk) => {
+      let q = supabase.from('sales').select('*');
+      q = applyFilters(q);
+      q = q.gt('id', chunk.startId);
+      q = q.lte('id', chunk.endId);
+      q = q.order('id', { ascending: true });
+      
+      const { data, error } = await q;
+      if (error) throw error;
+      return data || [];
+    });
+    
+    const results = await Promise.all(batchPromises);
+    return results.flat();
+  };
   
   try {
-    // Simple sequential fetching - reliable for filtered data
+    // Use parallel fetching for faster exports
     while (hasMore) {
-      const batch = await fetchBatch(lastId);
+      let batch;
+      
+      // Try parallel fetching first (faster for large exports)
+      try {
+        batch = await fetchParallelBatches(lastId, PARALLEL_BATCHES);
+      } catch (parallelError) {
+        console.log('[Export] Parallel fetch failed, falling back to sequential:', parallelError.message);
+        batch = await fetchBatch(lastId);
+      }
       
       if (!batch || batch.length === 0) {
         hasMore = false;
@@ -572,14 +637,14 @@ const exportSalesFromDB = async (filters, sorting, onBatch) => {
       // Update cursor to last ID in this batch
       lastId = batch[batch.length - 1].id;
       
-      // Check if this was the last batch
-      if (batch.length < BATCH_SIZE) {
+      // Check if this was the last batch (less than expected parallel batch size)
+      if (batch.length < BATCH_SIZE * PARALLEL_BATCHES) {
         hasMore = false;
-        break;
+        // Don't break - still need to process this batch
       }
       
-      // Log progress every 50k records
-      if (totalExported % 50000 < BATCH_SIZE) {
+      // Log progress every 25k records (more frequent for faster exports)
+      if (totalExported % 25000 < BATCH_SIZE * PARALLEL_BATCHES) {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         const rate = Math.round(totalExported / parseFloat(elapsed));
         console.log(`[Export] Progress: ${totalExported} records in ${elapsed}s (${rate} rec/s)`);

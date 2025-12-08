@@ -28,10 +28,15 @@ function SearchBar({ value, onSearch }) {
       clearTimeout(timeoutRef.current);
     }
     
-    // Debounce the search - wait 500ms after user stops typing
-    timeoutRef.current = setTimeout(() => {
-      onSearch(newValue);
-    }, 500);
+    // Only search if input is empty (clear) or has 3+ characters
+    // This prevents slow queries with very short search terms
+    if (newValue.length === 0 || newValue.length >= 3) {
+      // Debounce the search - wait 800ms after user stops typing
+      // Increased from 500ms to reduce unnecessary queries and timeouts
+      timeoutRef.current = setTimeout(() => {
+        onSearch(newValue);
+      }, 800);
+    }
   };
 
   const handleClear = () => {
@@ -62,7 +67,7 @@ function SearchBar({ value, onSearch }) {
         <input
           type="text"
           className="search-input"
-          placeholder="Name, Phone no."
+          placeholder="Search name or phone (min 3 chars)"
           value={inputValue}
           onChange={handleChange}
           onKeyDown={handleKeyDown}

@@ -45,7 +45,14 @@ export function useSalesData() {
       }
     } catch (err) {
       console.error('Error fetching sales data:', err);
-      setError(err.message || 'An error occurred while fetching data');
+      // Provide user-friendly error messages
+      let errorMessage = err.message || 'An error occurred while fetching data';
+      if (errorMessage.toLowerCase().includes('timeout')) {
+        errorMessage = 'Search is taking too long. Try using filters or a more specific search term.';
+      } else if (errorMessage.includes('No response')) {
+        errorMessage = 'Server is not responding. Please try again in a moment.';
+      }
+      setError(errorMessage);
       setData([]);
       setTotalItems(0);
       setTotalPages(0);
