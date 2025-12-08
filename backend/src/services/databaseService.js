@@ -311,11 +311,24 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
       // Try 2: Direct search_index query
       if (!matchingIds) {
         try {
-          const { data: indexData, error: indexError } = await supabase
+          const phoneDigits = searchTerm.replace(/\D/g, '');
+          let indexQuery = supabase
             .from('search_index')
-            .select('id')
-            .or(`first_name.ilike.${searchTerm}%,name_lower.ilike.${searchTerm}%,name_lower.ilike.%${searchTerm}%,phone_digits.ilike.%${searchTerm.replace(/\D/g, '')}%`)
-            .limit(500);
+            .select('id');
+          
+          // Build OR conditions properly for Supabase PostgREST syntax
+          // Format: column.operator.value (no spaces around dots)
+          const searchPattern = `${searchTerm}%`;
+          const containsPattern = `%${searchTerm}%`;
+          
+          if (phoneDigits.length >= 3) {
+            const phonePattern = `%${phoneDigits}%`;
+            indexQuery = indexQuery.or(`first_name.ilike.${searchPattern},name_lower.ilike.${searchPattern},name_lower.ilike.${containsPattern},phone_digits.ilike.${phonePattern}`);
+          } else {
+            indexQuery = indexQuery.or(`first_name.ilike.${searchPattern},name_lower.ilike.${searchPattern},name_lower.ilike.${containsPattern}`);
+          }
+          
+          const { data: indexData, error: indexError } = await indexQuery.limit(500);
           
           if (!indexError && indexData) {
             matchingIds = indexData.map(r => r.id);
@@ -325,6 +338,38 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
           }
         } catch (e) {
           console.log('[DB] search_index query failed:', e.message);
+        }
+      }
+      
+      // Try 4: Direct sales table query (slower but works without setup)
+      if (!matchingIds) {
+        try {
+          console.log('[DB] Using direct sales table search (fallback)');
+          const phoneDigits = searchTerm.replace(/\D/g, '');
+          const searchPattern = `${searchTerm}%`;
+          const phonePattern = phoneDigits.length >= 3 ? `%${phoneDigits}%` : null;
+          
+          let directQuery = supabase
+            .from('sales')
+            .select('id');
+          
+          // Search by customer_name (case-insensitive) or phone
+          if (phonePattern) {
+            directQuery = directQuery.or(`customer_name.ilike.${searchPattern},phone_number.ilike.${phonePattern}`);
+          } else {
+            directQuery = directQuery.ilike('customer_name', searchPattern);
+          }
+          
+          const { data: directData, error: directError } = await directQuery.limit(200);
+          
+          if (!directError && directData && directData.length > 0) {
+            matchingIds = directData.map(r => r.id);
+            console.log(`[DB] Direct search found ${matchingIds.length} matches`);
+          } else if (directError) {
+            console.log('[DB] Direct search failed:', directError.message);
+          }
+        } catch (e) {
+          console.log('[DB] Direct search failed:', e.message);
         }
       }
       
@@ -419,9 +464,9 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
         };
       }
       
-      // Fallback: Search not available, return message
+      // Fallback: All search methods failed
       if (!matchingIds) {
-        console.log('[DB] No search index available');
+        console.log('[DB] All search methods failed - no results');
         return {
           data: [],
           totalItems: 0,
@@ -429,8 +474,7 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
           totalPages: 0,
           itemsPerPage: pagination.limit,
           hasNextPage: false,
-          hasPrevPage: false,
-          error: 'Search requires setup. Please run step9-search-index-table.sql in Supabase.'
+          hasPrevPage: false
         };
       }
     }
