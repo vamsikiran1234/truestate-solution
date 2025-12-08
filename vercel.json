@@ -1,9 +1,9 @@
 {
   "version": 2,
-  "framework": "vite",
-  "buildCommand": "cd frontend && npm install && npm run build",
+  "framework": null,
+  "buildCommand": "ls -la && cd frontend && npm install && npm run build",
   "outputDirectory": "frontend/dist",
-  "installCommand": "echo 'Skipping root install'",
+  "installCommand": "pwd && ls -la",
   "routes": [
     {
       "src": "/api/(.*)",
