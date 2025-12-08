@@ -281,187 +281,153 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
     
     console.log('[DB] hasFilters:', hasFilters, '| activeFilterCount:', activeFilterCount);
     
-    // OPTIMIZATION: For search-only queries, use search_index table or RPC
-    const isSearchOnly = filters.search && filters.search.length >= 2 && activeFilterCount === 1;
+    // Check if search is present (regardless of other filters)
+    const hasSearch = filters.search && filters.search.length >= 2;
+    const hasOtherFilters = activeFilterCount > (hasSearch ? 1 : 0);
     
-    if (isSearchOnly) {
-      console.log('[DB] Using fast search path (search only, no other filters)');
+    // OPTIMIZATION: When search is present, use search_index for fast ID lookup
+    if (hasSearch) {
+      console.log('[DB] Search detected, using search_index strategy');
       const searchTerm = filters.search.trim().toLowerCase();
       
-      // Strategy 1: Try the quick_search RPC function (fastest if available)
+      // Get matching IDs from search_index (fast!)
+      let matchingIds = null;
+      
+      // Try 1: RPC function (fastest)
       try {
         const { data: searchIds, error: rpcError } = await supabase
-          .rpc('quick_search', { search_term: searchTerm, max_results: 100 });
+          .rpc('search_with_ids', { search_term: searchTerm, max_results: 500 });
         
         if (!rpcError && searchIds && searchIds.length > 0) {
-          // Fetch full records for matching IDs
-          const ids = searchIds.map(r => r.id);
-          const { data: searchData, error: fetchError } = await supabase
-            .from('sales')
-            .select('*')
-            .in('id', ids)
-            .order('date', { ascending: false });
-          
-          if (!fetchError && searchData) {
-            const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
-            console.log(`[DB] RPC search completed: ${queryTime}s, ${searchData.length} records`);
-            
-            return {
-              data: transformRows(searchData) || [],
-              totalItems: searchData.length,
-              currentPage: 1,
-              totalPages: 1,
-              itemsPerPage: 100,
-              hasNextPage: false,
-              hasPrevPage: false,
-              searchLimited: true
-            };
-          }
-        } else if (!rpcError && searchIds && searchIds.length === 0) {
-          console.log('[DB] RPC search: no matches found');
-          return {
-            data: [],
-            totalItems: 0,
-            currentPage: 1,
-            totalPages: 0,
-            itemsPerPage: 100,
-            hasNextPage: false,
-            hasPrevPage: false
-          };
+          matchingIds = searchIds.map(r => r.matching_id);
+          console.log(`[DB] RPC found ${matchingIds.length} matches`);
+        } else if (rpcError) {
+          console.log('[DB] search_with_ids RPC not available:', rpcError.message);
         }
-        if (rpcError) {
-          console.log('[DB] RPC not available:', rpcError.message);
-        }
-      } catch (rpcErr) {
-        console.log('[DB] RPC failed:', rpcErr.message);
+      } catch (e) {
+        console.log('[DB] RPC failed:', e.message);
       }
       
-      // Strategy 2: Try the search_index table directly
-      try {
-        const { data: indexData, error: indexError } = await supabase
-          .from('search_index')
-          .select('id')
-          .or(`name_prefix.ilike.${searchTerm}%,name_lower.ilike.${searchTerm}%`)
-          .limit(100);
-        
-        if (!indexError && indexData && indexData.length > 0) {
-          const ids = indexData.map(r => r.id);
-          const { data: searchData, error: fetchError } = await supabase
-            .from('sales')
-            .select('*')
-            .in('id', ids)
-            .order('date', { ascending: false });
+      // Try 2: Direct search_index query
+      if (!matchingIds) {
+        try {
+          const { data: indexData, error: indexError } = await supabase
+            .from('search_index')
+            .select('id')
+            .or(`first_name.ilike.${searchTerm}%,name_lower.ilike.${searchTerm}%,name_lower.ilike.%${searchTerm}%,phone_digits.ilike.%${searchTerm.replace(/\D/g, '')}%`)
+            .limit(500);
           
-          if (!fetchError && searchData) {
-            const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
-            console.log(`[DB] Index table search completed: ${queryTime}s, ${searchData.length} records`);
-            
-            return {
-              data: transformRows(searchData) || [],
-              totalItems: searchData.length,
-              currentPage: 1,
-              totalPages: 1,
-              itemsPerPage: 100,
-              hasNextPage: false,
-              hasPrevPage: false,
-              searchLimited: true
-            };
+          if (!indexError && indexData) {
+            matchingIds = indexData.map(r => r.id);
+            console.log(`[DB] search_index found ${matchingIds.length} matches`);
+          } else if (indexError) {
+            console.log('[DB] search_index table not available:', indexError.message);
           }
-        } else if (!indexError && indexData && indexData.length === 0) {
-          console.log('[DB] Index search: no matches found');
-          return {
-            data: [],
-            totalItems: 0,
-            currentPage: 1,
-            totalPages: 0,
-            itemsPerPage: 100,
-            hasNextPage: false,
-            hasPrevPage: false
-          };
-        }
-        if (indexError) {
-          console.log('[DB] search_index table not available:', indexError.message);
-        }
-      } catch (indexErr) {
-        console.log('[DB] Index query failed:', indexErr.message);
-      }
-      
-      // Strategy 3: Try in-memory cache
-      const cacheStatus = searchCache.getStatus();
-      if (cacheStatus.isReady) {
-        console.log('[DB] Using in-memory search cache');
-        const matchingIds = searchCache.search(searchTerm, 100);
-        
-        if (matchingIds && matchingIds.length > 0) {
-          const { data: searchData, error: searchError } = await supabase
-            .from('sales')
-            .select('*')
-            .in('id', matchingIds)
-            .order('date', { ascending: false });
-          
-          if (!searchError && searchData) {
-            const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
-            console.log(`[DB] Cache search completed: ${queryTime}s, ${searchData.length} records`);
-            
-            return {
-              data: transformRows(searchData) || [],
-              totalItems: searchData.length,
-              currentPage: 1,
-              totalPages: 1,
-              itemsPerPage: 100,
-              hasNextPage: false,
-              hasPrevPage: false,
-              searchLimited: true
-            };
-          }
-        } else if (matchingIds && matchingIds.length === 0) {
-          return {
-            data: [],
-            totalItems: 0,
-            currentPage: 1,
-            totalPages: 0,
-            itemsPerPage: 100,
-            hasNextPage: false,
-            hasPrevPage: false
-          };
+        } catch (e) {
+          console.log('[DB] search_index query failed:', e.message);
         }
       }
       
-      // Strategy 4: Last resort - direct query with strict limit (may timeout)
-      console.log('[DB] No fast search available, trying direct query with limit');
-      try {
-        let query = supabase.from('sales').select('*');
-        query = query.ilike('customer_name', `${searchTerm}%`);
-        query = query.order('id', { ascending: true }); // Use id for faster sorting
-        query = query.limit(50); // Very small limit to avoid timeout
+      // Try 3: In-memory cache
+      if (!matchingIds) {
+        const cacheStatus = searchCache.getStatus();
+        if (cacheStatus.isReady) {
+          matchingIds = searchCache.search(searchTerm, 500);
+          if (matchingIds) {
+            console.log(`[DB] Cache found ${matchingIds.length} matches`);
+          }
+        }
+      }
+      
+      // If we have matching IDs, query sales table with those IDs + other filters
+      if (matchingIds && matchingIds.length > 0) {
+        // Build query with ID filter and other filters
+        let query = supabase.from('sales').select('*', { count: 'exact' });
+        query = query.in('id', matchingIds);
         
-        const { data: searchData, error: searchError } = await query;
+        // Apply additional filters
+        if (filters.regions?.length > 0) {
+          query = query.in('customer_region', filters.regions);
+        }
+        if (filters.genders?.length > 0) {
+          query = query.in('gender', filters.genders);
+        }
+        if (filters.categories?.length > 0) {
+          query = query.in('product_category', filters.categories);
+        }
+        if (filters.paymentMethods?.length > 0) {
+          query = query.in('payment_method', filters.paymentMethods);
+        }
+        if (filters.tags?.length === 1) {
+          query = query.ilike('tags', `%${filters.tags[0]}%`);
+        } else if (filters.tags?.length > 1) {
+          const tagPatterns = filters.tags.map(tag => `tags.ilike.%${tag}%`).join(',');
+          query = query.or(tagPatterns);
+        }
+        if (filters.minAge !== null && filters.minAge !== undefined) {
+          query = query.gte('age', filters.minAge);
+        }
+        if (filters.maxAge !== null && filters.maxAge !== undefined) {
+          query = query.lte('age', filters.maxAge);
+        }
+        if (filters.startDate) {
+          query = query.gte('date', filters.startDate);
+        }
+        if (filters.endDate) {
+          query = query.lte('date', filters.endDate);
+        }
         
-        if (!searchError && searchData) {
+        // Apply sorting
+        const sortColumn = sorting.sortBy === 'date' ? 'date' : 
+                          sorting.sortBy === 'amount' ? 'final_amount' : 
+                          sorting.sortBy === 'customer' ? 'customer_name' : 'date';
+        query = query.order(sortColumn, { ascending: sorting.sortOrder === 'asc' });
+        
+        // Apply pagination
+        const offset = (pagination.page - 1) * pagination.limit;
+        query = query.range(offset, offset + pagination.limit - 1);
+        
+        const { data: searchData, error: searchError, count } = await query;
+        
+        if (!searchError) {
+          const totalCount = count || searchData?.length || 0;
           const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
-          console.log(`[DB] Direct search completed: ${queryTime}s, ${searchData.length} records`);
+          console.log(`[DB] Search+filters completed: ${queryTime}s, ${searchData?.length || 0} records, total: ${totalCount}`);
           
           return {
             data: transformRows(searchData) || [],
-            totalItems: searchData.length,
-            currentPage: 1,
-            totalPages: 1,
-            itemsPerPage: 50,
-            hasNextPage: false,
-            hasPrevPage: false,
-            searchLimited: true
+            totalItems: totalCount,
+            currentPage: pagination.page,
+            totalPages: Math.ceil(totalCount / pagination.limit),
+            itemsPerPage: pagination.limit,
+            hasNextPage: pagination.page < Math.ceil(totalCount / pagination.limit),
+            hasPrevPage: pagination.page > 1
           };
         }
-        if (searchError) throw searchError;
-      } catch (directErr) {
-        console.log('[DB] Direct search failed:', directErr.message);
-        // Return empty with message
+        console.log('[DB] Search+filters query error:', searchError.message);
+      } else if (matchingIds && matchingIds.length === 0) {
+        // No search matches found
+        console.log('[DB] No search matches found');
         return {
           data: [],
           totalItems: 0,
           currentPage: 1,
           totalPages: 0,
-          itemsPerPage: 25,
+          itemsPerPage: pagination.limit,
+          hasNextPage: false,
+          hasPrevPage: false
+        };
+      }
+      
+      // Fallback: Search not available, return message
+      if (!matchingIds) {
+        console.log('[DB] No search index available');
+        return {
+          data: [],
+          totalItems: 0,
+          currentPage: 1,
+          totalPages: 0,
+          itemsPerPage: pagination.limit,
           hasNextPage: false,
           hasPrevPage: false,
           error: 'Search requires setup. Please run step9-search-index-table.sql in Supabase.'

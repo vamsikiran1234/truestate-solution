@@ -1,6 +1,6 @@
 /**
  * Lightweight Search Cache for Supabase
- * Loads only customer names and IDs for fast in-memory search
+ * Loads customer names and phone numbers for fast in-memory search
  * Works with 1M+ records by only loading searchable fields
  */
 
@@ -8,7 +8,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 class SearchCache {
   constructor() {
-    this.names = []; // Array of { id, name (lowercase) }
+    this.records = []; // Array of { id, name (lowercase), phone (digits only) }
     this.isReady = false;
     this.isLoading = false;
     this.lastBuildTime = null;
@@ -16,7 +16,7 @@ class SearchCache {
 
   /**
    * Initialize the cache by loading searchable data from Supabase
-   * Only loads id and customer_name to minimize memory usage
+   * Only loads id, customer_name, and phone_number to minimize memory usage
    */
   async build(supabaseUrl, supabaseKey) {
     if (this.isLoading) {
@@ -40,12 +40,12 @@ class SearchCache {
       const BATCH_SIZE = 50000;
       let offset = 0;
       let hasMore = true;
-      this.names = [];
+      this.records = [];
 
       while (hasMore) {
         const { data, error } = await supabase
           .from('sales')
-          .select('id, customer_name')
+          .select('id, customer_name, phone_number')
           .range(offset, offset + BATCH_SIZE - 1)
           .order('id', { ascending: true });
 
@@ -59,11 +59,12 @@ class SearchCache {
           break;
         }
 
-        // Add to cache with lowercase name for case-insensitive search
+        // Add to cache with lowercase name and digits-only phone
         for (const row of data) {
-          this.names.push({
+          this.records.push({
             id: row.id,
-            name: (row.customer_name || '').toLowerCase()
+            name: (row.customer_name || '').toLowerCase(),
+            phone: (row.phone_number || '').replace(/\D/g, '') // digits only
           });
         }
 
@@ -84,10 +85,10 @@ class SearchCache {
       this.isReady = true;
       this.lastBuildTime = new Date();
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-      console.log(`[SearchCache] Built cache with ${this.names.length} records in ${elapsed}s`);
+      console.log(`[SearchCache] Built cache with ${this.records.length} records in ${elapsed}s`);
       
-      // Memory usage estimate: ~100 bytes per record = ~100MB for 1M records
-      const memoryMB = Math.round((this.names.length * 100) / (1024 * 1024));
+      // Memory usage estimate: ~120 bytes per record = ~120MB for 1M records
+      const memoryMB = Math.round((this.records.length * 120) / (1024 * 1024));
       console.log(`[SearchCache] Estimated memory usage: ~${memoryMB}MB`);
       
     } catch (error) {
@@ -98,7 +99,7 @@ class SearchCache {
   }
 
   /**
-   * Search for matching IDs using prefix matching
+   * Search for matching IDs using name or phone number
    * Returns array of matching record IDs (limited to maxResults)
    */
   search(query, maxResults = 100) {
@@ -108,23 +109,35 @@ class SearchCache {
 
     const startTime = Date.now();
     const normalizedQuery = query.toLowerCase().trim();
+    const queryDigits = query.replace(/\D/g, ''); // Extract digits for phone search
     const results = [];
 
-    // Prefix search - O(n) but very fast since we're just comparing strings
-    for (let i = 0; i < this.names.length && results.length < maxResults; i++) {
-      if (this.names[i].name.startsWith(normalizedQuery)) {
-        results.push(this.names[i].id);
+    // Strategy 1: Prefix search on name (fastest)
+    for (let i = 0; i < this.records.length && results.length < maxResults; i++) {
+      if (this.records[i].name.startsWith(normalizedQuery)) {
+        results.push(this.records[i].id);
       }
     }
 
-    // If few prefix matches, also do contains search
-    if (results.length < maxResults && normalizedQuery.length >= 3) {
-      for (let i = 0; i < this.names.length && results.length < maxResults; i++) {
-        const id = this.names[i].id;
-        // Skip if already in results
+    // Strategy 2: Phone number search (if query has 3+ digits)
+    if (queryDigits.length >= 3 && results.length < maxResults) {
+      for (let i = 0; i < this.records.length && results.length < maxResults; i++) {
+        const id = this.records[i].id;
+        if (results.includes(id)) continue; // Skip if already found
+        
+        if (this.records[i].phone.includes(queryDigits)) {
+          results.push(id);
+        }
+      }
+    }
+
+    // Strategy 3: Contains search on name (if few results so far)
+    if (normalizedQuery.length >= 3 && results.length < maxResults) {
+      for (let i = 0; i < this.records.length && results.length < maxResults; i++) {
+        const id = this.records[i].id;
         if (results.includes(id)) continue;
         
-        if (this.names[i].name.includes(normalizedQuery)) {
+        if (this.records[i].name.includes(normalizedQuery)) {
           results.push(id);
         }
       }
@@ -143,7 +156,7 @@ class SearchCache {
     return {
       isReady: this.isReady,
       isLoading: this.isLoading,
-      recordCount: this.names.length,
+      recordCount: this.records.length,
       lastBuildTime: this.lastBuildTime
     };
   }
