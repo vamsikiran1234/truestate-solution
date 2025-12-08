@@ -84,4 +84,22 @@ const startServer = async () => {
   }
 };
 
-startServer();
+// Only start server if not in serverless environment (Vercel)
+if (process.env.VERCEL !== '1') {
+  startServer();
+} else {
+  // Initialize for serverless
+  (async () => {
+    try {
+      await initSupabase();
+      if (!isUsingDatabase()) {
+        await loadSalesData();
+      }
+    } catch (error) {
+      console.error('Failed to initialize:', error);
+    }
+  })();
+}
+
+// Export for Vercel serverless
+module.exports = app;
