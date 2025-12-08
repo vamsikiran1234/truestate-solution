@@ -449,68 +449,67 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
       // Build query with ID filter and other filters
       let query = supabase.from('sales').select('*', { count: 'exact' });
       query = query.in('id', matchingIds);
-        
-        // Apply additional filters
-        if (filters.regions?.length > 0) {
-          query = query.in('customer_region', filters.regions);
-        }
-        if (filters.genders?.length > 0) {
-          query = query.in('gender', filters.genders);
-        }
-        if (filters.categories?.length > 0) {
-          query = query.in('product_category', filters.categories);
-        }
-        if (filters.paymentMethods?.length > 0) {
-          query = query.in('payment_method', filters.paymentMethods);
-        }
-        if (filters.tags?.length === 1) {
-          query = query.ilike('tags', `%${filters.tags[0]}%`);
-        } else if (filters.tags?.length > 1) {
-          const tagPatterns = filters.tags.map(tag => `tags.ilike.%${tag}%`).join(',');
-          query = query.or(tagPatterns);
-        }
-        if (filters.minAge !== null && filters.minAge !== undefined) {
-          query = query.gte('age', filters.minAge);
-        }
-        if (filters.maxAge !== null && filters.maxAge !== undefined) {
-          query = query.lte('age', filters.maxAge);
-        }
-        if (filters.startDate) {
-          query = query.gte('date', filters.startDate);
-        }
-        if (filters.endDate) {
-          query = query.lte('date', filters.endDate);
-        }
-        
-        // Apply sorting
-        const sortColumn = sorting.sortBy === 'date' ? 'date' : 
-                          sorting.sortBy === 'amount' ? 'final_amount' : 
-                          sorting.sortBy === 'customer' ? 'customer_name' : 'date';
-        query = query.order(sortColumn, { ascending: sorting.sortOrder === 'asc' });
-        
-        // Apply pagination
-        const offset = (pagination.page - 1) * pagination.limit;
-        query = query.range(offset, offset + pagination.limit - 1);
-        
-        const { data: searchData, error: searchError, count } = await query;
-        
-        if (!searchError) {
-          const totalCount = count || searchData?.length || 0;
-          const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
-          console.log(`[DB] Search+filters completed: ${queryTime}s, ${searchData?.length || 0} records, total: ${totalCount}`);
-          
-          return {
-            data: transformRows(searchData) || [],
-            totalItems: totalCount,
-            currentPage: pagination.page,
-            totalPages: Math.ceil(totalCount / pagination.limit),
-            itemsPerPage: pagination.limit,
-            hasNextPage: pagination.page < Math.ceil(totalCount / pagination.limit),
-            hasPrevPage: pagination.page > 1
-          };
-        }
-        console.log('[DB] Search+filters query error:', searchError.message);
+      
+      // Apply additional filters
+      if (filters.regions?.length > 0) {
+        query = query.in('customer_region', filters.regions);
       }
+      if (filters.genders?.length > 0) {
+        query = query.in('gender', filters.genders);
+      }
+      if (filters.categories?.length > 0) {
+        query = query.in('product_category', filters.categories);
+      }
+      if (filters.paymentMethods?.length > 0) {
+        query = query.in('payment_method', filters.paymentMethods);
+      }
+      if (filters.tags?.length === 1) {
+        query = query.ilike('tags', `%${filters.tags[0]}%`);
+      } else if (filters.tags?.length > 1) {
+        const tagPatterns = filters.tags.map(tag => `tags.ilike.%${tag}%`).join(',');
+        query = query.or(tagPatterns);
+      }
+      if (filters.minAge !== null && filters.minAge !== undefined) {
+        query = query.gte('age', filters.minAge);
+      }
+      if (filters.maxAge !== null && filters.maxAge !== undefined) {
+        query = query.lte('age', filters.maxAge);
+      }
+      if (filters.startDate) {
+        query = query.gte('date', filters.startDate);
+      }
+      if (filters.endDate) {
+        query = query.lte('date', filters.endDate);
+      }
+      
+      // Apply sorting
+      const sortColumn = sorting.sortBy === 'date' ? 'date' : 
+                        sorting.sortBy === 'amount' ? 'final_amount' : 
+                        sorting.sortBy === 'customer' ? 'customer_name' : 'date';
+      query = query.order(sortColumn, { ascending: sorting.sortOrder === 'asc' });
+      
+      // Apply pagination
+      const offset = (pagination.page - 1) * pagination.limit;
+      query = query.range(offset, offset + pagination.limit - 1);
+      
+      const { data: searchData, error: searchError, count } = await query;
+      
+      if (!searchError) {
+        const totalCount = count || searchData?.length || 0;
+        const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
+        console.log(`[DB] Search+filters completed: ${queryTime}s, ${searchData?.length || 0} records, total: ${totalCount}`);
+        
+        return {
+          data: transformRows(searchData) || [],
+          totalItems: totalCount,
+          currentPage: pagination.page,
+          totalPages: Math.ceil(totalCount / pagination.limit),
+          itemsPerPage: pagination.limit,
+          hasNextPage: pagination.page < Math.ceil(totalCount / pagination.limit),
+          hasPrevPage: pagination.page > 1
+        };
+      }
+      console.log('[DB] Search+filters query error:', searchError.message);
     }
     
     // Get total count with filters (use pre-computed stats if no filters)
