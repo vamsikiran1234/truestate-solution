@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import '../styles/ExportButton.css';
 
-// API base URL for export - use relative path so Vite proxy handles it
-const API_BASE_URL = '/api';
+// API base URL for export - use environment variable for production
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 /**
  * Build export URL with filter parameters
