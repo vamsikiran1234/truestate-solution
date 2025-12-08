@@ -281,21 +281,118 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
     
     console.log('[DB] hasFilters:', hasFilters, '| activeFilterCount:', activeFilterCount);
     
-    // OPTIMIZATION: For search-only queries, use in-memory cache if available
+    // OPTIMIZATION: For search-only queries, use search_index table or RPC
     const isSearchOnly = filters.search && filters.search.length >= 2 && activeFilterCount === 1;
     
     if (isSearchOnly) {
       console.log('[DB] Using fast search path (search only, no other filters)');
-      const searchTerm = filters.search.trim();
+      const searchTerm = filters.search.trim().toLowerCase();
       
-      // Try in-memory search cache first (instant!)
+      // Strategy 1: Try the quick_search RPC function (fastest if available)
+      try {
+        const { data: searchIds, error: rpcError } = await supabase
+          .rpc('quick_search', { search_term: searchTerm, max_results: 100 });
+        
+        if (!rpcError && searchIds && searchIds.length > 0) {
+          // Fetch full records for matching IDs
+          const ids = searchIds.map(r => r.id);
+          const { data: searchData, error: fetchError } = await supabase
+            .from('sales')
+            .select('*')
+            .in('id', ids)
+            .order('date', { ascending: false });
+          
+          if (!fetchError && searchData) {
+            const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
+            console.log(`[DB] RPC search completed: ${queryTime}s, ${searchData.length} records`);
+            
+            return {
+              data: transformRows(searchData) || [],
+              totalItems: searchData.length,
+              currentPage: 1,
+              totalPages: 1,
+              itemsPerPage: 100,
+              hasNextPage: false,
+              hasPrevPage: false,
+              searchLimited: true
+            };
+          }
+        } else if (!rpcError && searchIds && searchIds.length === 0) {
+          console.log('[DB] RPC search: no matches found');
+          return {
+            data: [],
+            totalItems: 0,
+            currentPage: 1,
+            totalPages: 0,
+            itemsPerPage: 100,
+            hasNextPage: false,
+            hasPrevPage: false
+          };
+        }
+        if (rpcError) {
+          console.log('[DB] RPC not available:', rpcError.message);
+        }
+      } catch (rpcErr) {
+        console.log('[DB] RPC failed:', rpcErr.message);
+      }
+      
+      // Strategy 2: Try the search_index table directly
+      try {
+        const { data: indexData, error: indexError } = await supabase
+          .from('search_index')
+          .select('id')
+          .or(`name_prefix.ilike.${searchTerm}%,name_lower.ilike.${searchTerm}%`)
+          .limit(100);
+        
+        if (!indexError && indexData && indexData.length > 0) {
+          const ids = indexData.map(r => r.id);
+          const { data: searchData, error: fetchError } = await supabase
+            .from('sales')
+            .select('*')
+            .in('id', ids)
+            .order('date', { ascending: false });
+          
+          if (!fetchError && searchData) {
+            const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
+            console.log(`[DB] Index table search completed: ${queryTime}s, ${searchData.length} records`);
+            
+            return {
+              data: transformRows(searchData) || [],
+              totalItems: searchData.length,
+              currentPage: 1,
+              totalPages: 1,
+              itemsPerPage: 100,
+              hasNextPage: false,
+              hasPrevPage: false,
+              searchLimited: true
+            };
+          }
+        } else if (!indexError && indexData && indexData.length === 0) {
+          console.log('[DB] Index search: no matches found');
+          return {
+            data: [],
+            totalItems: 0,
+            currentPage: 1,
+            totalPages: 0,
+            itemsPerPage: 100,
+            hasNextPage: false,
+            hasPrevPage: false
+          };
+        }
+        if (indexError) {
+          console.log('[DB] search_index table not available:', indexError.message);
+        }
+      } catch (indexErr) {
+        console.log('[DB] Index query failed:', indexErr.message);
+      }
+      
+      // Strategy 3: Try in-memory cache
       const cacheStatus = searchCache.getStatus();
       if (cacheStatus.isReady) {
         console.log('[DB] Using in-memory search cache');
         const matchingIds = searchCache.search(searchTerm, 100);
         
         if (matchingIds && matchingIds.length > 0) {
-          // Fetch full records for matching IDs
           const { data: searchData, error: searchError } = await supabase
             .from('sales')
             .select('*')
@@ -318,9 +415,6 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
             };
           }
         } else if (matchingIds && matchingIds.length === 0) {
-          // Cache returned no results
-          const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
-          console.log(`[DB] Cache search completed: ${queryTime}s, 0 records`);
           return {
             data: [],
             totalItems: 0,
@@ -328,36 +422,51 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
             totalPages: 0,
             itemsPerPage: 100,
             hasNextPage: false,
-            hasPrevPage: false,
-            searchLimited: true
+            hasPrevPage: false
           };
         }
       }
       
-      // Fallback: Simple prefix search with hard limit (if cache not ready)
-      console.log('[DB] Cache not ready, using database prefix search');
-      let query = supabase.from('sales').select('*');
-      query = query.ilike('customer_name', `${searchTerm}%`);
-      query = query.order('date', { ascending: false });
-      query = query.limit(100); // Hard limit for fast response
-      
-      const { data: searchData, error: searchError } = await query;
-      
-      if (searchError) throw searchError;
-      
-      const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
-      console.log(`[DB] Fast search completed: ${queryTime}s, ${searchData?.length || 0} records`);
-      
-      return {
-        data: transformRows(searchData) || [],
-        totalItems: searchData?.length || 0,
-        currentPage: 1,
-        totalPages: 1,
-        itemsPerPage: 100,
-        hasNextPage: false,
-        hasPrevPage: false,
-        searchLimited: true // Flag to indicate results are limited
-      };
+      // Strategy 4: Last resort - direct query with strict limit (may timeout)
+      console.log('[DB] No fast search available, trying direct query with limit');
+      try {
+        let query = supabase.from('sales').select('*');
+        query = query.ilike('customer_name', `${searchTerm}%`);
+        query = query.order('id', { ascending: true }); // Use id for faster sorting
+        query = query.limit(50); // Very small limit to avoid timeout
+        
+        const { data: searchData, error: searchError } = await query;
+        
+        if (!searchError && searchData) {
+          const queryTime = ((Date.now() - startTime) / 1000).toFixed(3);
+          console.log(`[DB] Direct search completed: ${queryTime}s, ${searchData.length} records`);
+          
+          return {
+            data: transformRows(searchData) || [],
+            totalItems: searchData.length,
+            currentPage: 1,
+            totalPages: 1,
+            itemsPerPage: 50,
+            hasNextPage: false,
+            hasPrevPage: false,
+            searchLimited: true
+          };
+        }
+        if (searchError) throw searchError;
+      } catch (directErr) {
+        console.log('[DB] Direct search failed:', directErr.message);
+        // Return empty with message
+        return {
+          data: [],
+          totalItems: 0,
+          currentPage: 1,
+          totalPages: 0,
+          itemsPerPage: 25,
+          hasNextPage: false,
+          hasPrevPage: false,
+          error: 'Search requires setup. Please run step9-search-index-table.sql in Supabase.'
+        };
+      }
     }
     
     // Get total count with filters (use pre-computed stats if no filters)
