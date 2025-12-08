@@ -1,27 +1,13 @@
 {
   "version": 2,
-  "framework": null,
+  "framework": "vite",
   "buildCommand": "cd ../frontend && npm install && npm run build",
   "outputDirectory": "../frontend/dist",
-  "installCommand": "npm install",
-  "routes": [
+  "installCommand": "echo 'skip'",
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "dest": "/api/$1"
-    },
-    {
-      "src": "/(.*\\.(js|css|ico|png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|map))",
-      "dest": "/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/index.html"
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
-  ],
-  "functions": {
-    "api/*.js": {
-      "runtime": "@vercel/node@3",
-      "includeFiles": "node_modules/**"
-    }
-  }
+  ]
 }
