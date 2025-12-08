@@ -12,11 +12,12 @@ class SearchCache {
     this.isReady = false;
     this.isLoading = false;
     this.lastBuildTime = null;
+    this.loadProgress = 0;
   }
 
   /**
    * Initialize the cache by loading searchable data from Supabase
-   * Only loads id, customer_name, and phone_number to minimize memory usage
+   * First tries search_index table (faster), then falls back to sales table
    */
   async build(supabaseUrl, supabaseKey) {
     if (this.isLoading) {
@@ -30,56 +31,19 @@ class SearchCache {
     }
 
     this.isLoading = true;
+    this.loadProgress = 0;
     console.log('[SearchCache] Starting to build search cache...');
     const startTime = Date.now();
 
     try {
       const supabase = createClient(supabaseUrl, supabaseKey);
       
-      // Load in batches to avoid timeout
-      const BATCH_SIZE = 50000;
-      let offset = 0;
-      let hasMore = true;
-      this.records = [];
-
-      while (hasMore) {
-        const { data, error } = await supabase
-          .from('sales')
-          .select('id, customer_name, phone_number')
-          .range(offset, offset + BATCH_SIZE - 1)
-          .order('id', { ascending: true });
-
-        if (error) {
-          console.error('[SearchCache] Error fetching batch:', error.message);
-          break;
-        }
-
-        if (!data || data.length === 0) {
-          hasMore = false;
-          break;
-        }
-
-        // Add to cache with lowercase name and digits-only phone
-        for (const row of data) {
-          this.records.push({
-            id: row.id,
-            name: (row.customer_name || '').toLowerCase(),
-            phone: (row.phone_number || '').replace(/\D/g, '') // digits only
-          });
-        }
-
-        offset += data.length;
-        console.log(`[SearchCache] Loaded ${offset} records...`);
-
-        if (data.length < BATCH_SIZE) {
-          hasMore = false;
-        }
-
-        // Safety limit
-        if (offset >= 1000000) {
-          console.log('[SearchCache] Reached 1M limit');
-          hasMore = false;
-        }
+      // Try loading from search_index first (smaller, faster)
+      const loadedFromIndex = await this.loadFromSearchIndex(supabase);
+      
+      if (!loadedFromIndex) {
+        // Fall back to loading from sales table
+        await this.loadFromSalesTable(supabase);
       }
 
       this.isReady = true;
@@ -87,14 +51,131 @@ class SearchCache {
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       console.log(`[SearchCache] Built cache with ${this.records.length} records in ${elapsed}s`);
       
-      // Memory usage estimate: ~120 bytes per record = ~120MB for 1M records
-      const memoryMB = Math.round((this.records.length * 120) / (1024 * 1024));
+      // Memory usage estimate: ~80 bytes per record = ~80MB for 1M records
+      const memoryMB = Math.round((this.records.length * 80) / (1024 * 1024));
       console.log(`[SearchCache] Estimated memory usage: ~${memoryMB}MB`);
       
     } catch (error) {
       console.error('[SearchCache] Failed to build cache:', error.message);
+      // Mark as ready even if failed - we'll use other search methods
+      this.isReady = false;
     } finally {
       this.isLoading = false;
+    }
+  }
+
+  /**
+   * Load from search_index table (faster, smaller data)
+   */
+  async loadFromSearchIndex(supabase) {
+    try {
+      console.log('[SearchCache] Trying to load from search_index table...');
+      
+      const BATCH_SIZE = 100000; // Larger batches since data is smaller
+      let offset = 0;
+      let hasMore = true;
+      this.records = [];
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('search_index')
+          .select('id, name_lower, phone_digits')
+          .range(offset, offset + BATCH_SIZE - 1)
+          .order('id', { ascending: true });
+
+        if (error) {
+          console.log('[SearchCache] search_index not available:', error.message);
+          return false;
+        }
+
+        if (!data || data.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        // Add to cache
+        for (const row of data) {
+          this.records.push({
+            id: row.id,
+            name: row.name_lower || '',
+            phone: row.phone_digits || ''
+          });
+        }
+
+        offset += data.length;
+        this.loadProgress = offset;
+        console.log(`[SearchCache] Loaded ${offset} records from search_index...`);
+
+        if (data.length < BATCH_SIZE) {
+          hasMore = false;
+        }
+
+        if (offset >= 1000000) {
+          hasMore = false;
+        }
+      }
+
+      if (this.records.length > 0) {
+        console.log(`[SearchCache] Successfully loaded ${this.records.length} from search_index`);
+        return true;
+      }
+      return false;
+      
+    } catch (error) {
+      console.log('[SearchCache] search_index load failed:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Load from sales table (fallback)
+   */
+  async loadFromSalesTable(supabase) {
+    console.log('[SearchCache] Loading from sales table...');
+    
+    const BATCH_SIZE = 50000;
+    let offset = 0;
+    let hasMore = true;
+    this.records = [];
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('sales')
+        .select('id, customer_name, phone_number')
+        .range(offset, offset + BATCH_SIZE - 1)
+        .order('id', { ascending: true });
+
+      if (error) {
+        console.error('[SearchCache] Error fetching batch:', error.message);
+        break;
+      }
+
+      if (!data || data.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      // Add to cache with lowercase name and digits-only phone
+      for (const row of data) {
+        this.records.push({
+          id: row.id,
+          name: (row.customer_name || '').toLowerCase(),
+          phone: (row.phone_number || '').replace(/\D/g, '')
+        });
+      }
+
+      offset += data.length;
+      this.loadProgress = offset;
+      console.log(`[SearchCache] Loaded ${offset} records from sales...`);
+
+      if (data.length < BATCH_SIZE) {
+        hasMore = false;
+      }
+
+      if (offset >= 1000000) {
+        console.log('[SearchCache] Reached 1M limit');
+        hasMore = false;
+      }
     }
   }
 
@@ -157,6 +238,7 @@ class SearchCache {
       isReady: this.isReady,
       isLoading: this.isLoading,
       recordCount: this.records.length,
+      loadProgress: this.loadProgress,
       lastBuildTime: this.lastBuildTime
     };
   }
