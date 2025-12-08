@@ -71,17 +71,20 @@ class SearchCache {
     try {
       console.log('[SearchCache] Trying to load from search_index table...');
       
-      const BATCH_SIZE = 100000; // Larger batches since data is smaller
-      let offset = 0;
+      // Use 1000-record batches (Supabase default limit)
+      const BATCH_SIZE = 1000;
+      let lastId = 0;
       let hasMore = true;
       this.records = [];
 
       while (hasMore) {
+        // Use ID-based pagination instead of offset (more reliable)
         const { data, error } = await supabase
           .from('search_index')
           .select('id, name_lower, phone_digits')
-          .range(offset, offset + BATCH_SIZE - 1)
-          .order('id', { ascending: true });
+          .gt('id', lastId)
+          .order('id', { ascending: true })
+          .limit(BATCH_SIZE);
 
         if (error) {
           console.log('[SearchCache] search_index not available:', error.message);
@@ -102,22 +105,32 @@ class SearchCache {
           });
         }
 
-        offset += data.length;
-        this.loadProgress = offset;
-        console.log(`[SearchCache] Loaded ${offset} records from search_index...`);
+        // Update lastId for next batch
+        lastId = data[data.length - 1].id;
+        this.loadProgress = this.records.length;
+        
+        // Log progress every 10000 records
+        if (this.records.length % 10000 === 0 || data.length < BATCH_SIZE) {
+          console.log(`[SearchCache] Loaded ${this.records.length} records from search_index...`);
+        }
 
         if (data.length < BATCH_SIZE) {
           hasMore = false;
         }
 
-        if (offset >= 1000000) {
+        if (this.records.length >= 1000000) {
           hasMore = false;
         }
       }
 
-      if (this.records.length > 0) {
+      if (this.records.length >= 10000) {
+        // Only use search_index if it has substantial data
         console.log(`[SearchCache] Successfully loaded ${this.records.length} from search_index`);
         return true;
+      } else if (this.records.length > 0) {
+        console.log(`[SearchCache] search_index only has ${this.records.length} records, falling back to sales table`);
+        this.records = []; // Clear partial data
+        return false;
       }
       return false;
       
@@ -131,10 +144,11 @@ class SearchCache {
    * Load from sales table (fallback)
    */
   async loadFromSalesTable(supabase) {
-    console.log('[SearchCache] Loading from sales table...');
+    console.log('[SearchCache] Loading from sales table (this may take a few minutes for 1M records)...');
     
-    const BATCH_SIZE = 50000;
-    let offset = 0;
+    // Use 1000-record batches (Supabase default limit)
+    const BATCH_SIZE = 1000;
+    let lastId = 0;
     let hasMore = true;
     this.records = [];
 
@@ -142,8 +156,9 @@ class SearchCache {
       const { data, error } = await supabase
         .from('sales')
         .select('id, customer_name, phone_number')
-        .range(offset, offset + BATCH_SIZE - 1)
-        .order('id', { ascending: true });
+        .gt('id', lastId)
+        .order('id', { ascending: true })
+        .limit(BATCH_SIZE);
 
       if (error) {
         console.error('[SearchCache] Error fetching batch:', error.message);
@@ -164,15 +179,19 @@ class SearchCache {
         });
       }
 
-      offset += data.length;
-      this.loadProgress = offset;
-      console.log(`[SearchCache] Loaded ${offset} records from sales...`);
+      lastId = data[data.length - 1].id;
+      this.loadProgress = this.records.length;
+      
+      // Log progress every 50000 records
+      if (this.records.length % 50000 === 0 || data.length < BATCH_SIZE) {
+        console.log(`[SearchCache] Loaded ${this.records.length} records from sales...`);
+      }
 
       if (data.length < BATCH_SIZE) {
         hasMore = false;
       }
 
-      if (offset >= 1000000) {
+      if (this.records.length >= 1000000) {
         console.log('[SearchCache] Reached 1M limit');
         hasMore = false;
       }
