@@ -17,4 +17,7 @@ router.get('/stats', salesController.getStats);
 // GET /api/sales/filtered-stats - Get statistics for filtered data
 router.get('/filtered-stats', salesController.getFilteredStats);
 
+// GET /api/sales/search-status - Get search cache status
+router.get('/search-status', salesController.getSearchStatus);
+
 module.exports = router;

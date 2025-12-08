@@ -1,5 +1,5 @@
 const { getSalesData, getPrecomputedFilterOptions } = require('./dataService');
-const { isUsingDatabase, getFilteredSalesFromDB, getFilterOptionsFromDB, getAllSalesFromDB, exportSalesFromDB } = require('./databaseService');
+const { isUsingDatabase, getFilteredSalesFromDB, getFilterOptionsFromDB, getAllSalesFromDB, exportSalesFromDB, getSearchCacheStatus } = require('./databaseService');
 const { 
   applySearch, 
   applyFilters, 
@@ -449,11 +449,28 @@ const exportSalesData = async (filters, sorting, onBatch) => {
   return totalExported;
 };
 
+/**
+ * Get search cache status
+ */
+const getSearchStatus = () => {
+  if (isUsingDatabase()) {
+    return getSearchCacheStatus();
+  }
+  // For CSV mode, search is always instant
+  return {
+    isReady: true,
+    isLoading: false,
+    recordCount: getSalesData().length,
+    mode: 'csv'
+  };
+};
+
 module.exports = {
   getSalesData: getSalesDataFiltered,
   getFilterOptions,
   getStats,
   getFilteredStats,
   invalidateCache,
-  exportSalesData
+  exportSalesData,
+  getSearchStatus
 };

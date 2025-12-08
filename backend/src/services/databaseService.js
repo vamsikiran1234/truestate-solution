@@ -285,30 +285,46 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
     const hasSearch = filters.search && filters.search.length >= 2;
     const hasOtherFilters = activeFilterCount > (hasSearch ? 1 : 0);
     
-    // OPTIMIZATION: When search is present, use search_index for fast ID lookup
+    // OPTIMIZATION: When search is present, use multi-strategy search
     if (hasSearch) {
       console.log('[DB] Search detected, using multi-strategy search');
       const searchTerm = filters.search.trim().toLowerCase();
       
       // Get matching IDs using various strategies
       let matchingIds = null;
+      let searchMethod = 'none';
       
-      // Try 1: fast_search RPC function (fastest - uses indexed search)
-      try {
-        const { data: searchIds, error: rpcError } = await supabase
-          .rpc('fast_search', { search_term: searchTerm, max_results: 200 });
-        
-        if (!rpcError && searchIds && searchIds.length > 0) {
-          matchingIds = searchIds.map(r => r.matching_id);
-          console.log(`[DB] fast_search RPC found ${matchingIds.length} matches`);
-        } else if (rpcError) {
-          console.log('[DB] fast_search RPC not available:', rpcError.message);
+      // Try 1: In-memory cache FIRST (instant if loaded - most reliable)
+      const cacheStatus = searchCache.getStatus();
+      if (cacheStatus.isReady) {
+        matchingIds = searchCache.search(searchTerm, 200);
+        if (matchingIds && matchingIds.length > 0) {
+          searchMethod = 'cache';
+          console.log(`[DB] Cache found ${matchingIds.length} matches`);
         }
-      } catch (e) {
-        console.log('[DB] fast_search RPC failed:', e.message);
+      } else {
+        console.log(`[DB] Cache status: ${cacheStatus.isLoading ? 'loading...' : 'not started'}, records: ${cacheStatus.recordCount}`);
       }
       
-      // Try 2: search_with_ids RPC function (alternative)
+      // Try 2: fast_search RPC function (if cache not ready)
+      if (!matchingIds) {
+        try {
+          const { data: searchIds, error: rpcError } = await supabase
+            .rpc('fast_search', { search_term: searchTerm, max_results: 200 });
+          
+          if (!rpcError && searchIds && searchIds.length > 0) {
+            matchingIds = searchIds.map(r => r.matching_id);
+            searchMethod = 'fast_search';
+            console.log(`[DB] fast_search RPC found ${matchingIds.length} matches`);
+          } else if (rpcError) {
+            console.log('[DB] fast_search RPC not available:', rpcError.message);
+          }
+        } catch (e) {
+          console.log('[DB] fast_search RPC failed:', e.message);
+        }
+      }
+      
+      // Try 3: search_with_ids RPC function (alternative)
       if (!matchingIds) {
         try {
           const { data: searchIds, error: rpcError } = await supabase
@@ -316,25 +332,13 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
           
           if (!rpcError && searchIds && searchIds.length > 0) {
             matchingIds = searchIds.map(r => r.matching_id);
+            searchMethod = 'search_with_ids';
             console.log(`[DB] search_with_ids RPC found ${matchingIds.length} matches`);
           } else if (rpcError) {
             console.log('[DB] search_with_ids RPC not available:', rpcError.message);
           }
         } catch (e) {
           console.log('[DB] search_with_ids RPC failed:', e.message);
-        }
-      }
-      
-      // Try 3: In-memory cache (instant if loaded)
-      if (!matchingIds) {
-        const cacheStatus = searchCache.getStatus();
-        if (cacheStatus.isReady) {
-          matchingIds = searchCache.search(searchTerm, 200);
-          if (matchingIds && matchingIds.length > 0) {
-            console.log(`[DB] Cache found ${matchingIds.length} matches`);
-          }
-        } else {
-          console.log(`[DB] Cache status: ${cacheStatus.isLoading ? 'loading...' : 'not started'}`);
         }
       }
       
@@ -350,6 +354,7 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
           
           if (!indexError && indexData && indexData.length > 0) {
             matchingIds = indexData.map(r => r.id);
+            searchMethod = 'search_index';
             console.log(`[DB] search_index found ${matchingIds.length} matches`);
           } else if (indexError) {
             console.log('[DB] search_index not available:', indexError.message);
@@ -359,27 +364,69 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
         }
       }
       
-      // Try 5: Direct sales table (last resort, limited)
+      // Try 5: Quick scan of first 100k records using ID range (works without indexes!)
       if (!matchingIds) {
         try {
-          console.log('[DB] Using direct sales query (last resort)');
+          console.log('[DB] Using ID range scan (fallback)');
           const searchPattern = `${searchTerm}%`;
           
-          const { data: directData, error: directError } = await supabase
-            .from('sales')
-            .select('id')
-            .ilike('customer_name', searchPattern)
-            .limit(50);  // Very limited to avoid timeout
+          // Query in ID ranges to find matches quickly
+          // This uses the primary key index which always exists
+          const SCAN_SIZE = 50000;
+          const MAX_SCANS = 4; // Scan up to 200k records
+          const foundIds = [];
           
-          if (!directError && directData && directData.length > 0) {
-            matchingIds = directData.map(r => r.id);
-            console.log(`[DB] Direct query found ${matchingIds.length} matches`);
-          } else if (directError) {
-            console.log('[DB] Direct query failed:', directError.message);
+          for (let scan = 0; scan < MAX_SCANS && foundIds.length < 50; scan++) {
+            const startId = scan * SCAN_SIZE + 1;
+            const endId = (scan + 1) * SCAN_SIZE;
+            
+            const { data: scanData, error: scanError } = await supabase
+              .from('sales')
+              .select('id')
+              .gte('id', startId)
+              .lte('id', endId)
+              .ilike('customer_name', searchPattern)
+              .limit(50);
+            
+            if (scanError) {
+              console.log(`[DB] Scan ${scan} failed:`, scanError.message);
+              break;
+            }
+            
+            if (scanData && scanData.length > 0) {
+              foundIds.push(...scanData.map(r => r.id));
+              console.log(`[DB] Scan ${scan} (IDs ${startId}-${endId}) found ${scanData.length} matches`);
+            }
+            
+            // If we found enough matches, stop scanning
+            if (foundIds.length >= 50) break;
+          }
+          
+          if (foundIds.length > 0) {
+            matchingIds = foundIds.slice(0, 200);
+            searchMethod = 'id_range_scan';
+            console.log(`[DB] ID range scan found ${matchingIds.length} total matches`);
           }
         } catch (e) {
-          console.log('[DB] Direct query failed:', e.message);
+          console.log('[DB] ID range scan failed:', e.message);
         }
+      }
+      
+      // If still no results and cache is loading, return helpful message
+      if (!matchingIds && cacheStatus.isLoading) {
+        console.log('[DB] Search cache is loading, returning partial response');
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(3);
+        return {
+          data: [],
+          totalItems: 0,
+          currentPage: 1,
+          totalPages: 0,
+          itemsPerPage: pagination.limit,
+          hasNextPage: false,
+          hasPrevPage: false,
+          searchStatus: 'loading',
+          message: 'Search index is being built. Please try again in 30 seconds.'
+        };
       }
       
       // If we have matching IDs, query sales table with those IDs + other filters

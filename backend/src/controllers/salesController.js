@@ -360,10 +360,31 @@ const exportSales = async (req, res) => {
   }
 };
 
+/**
+ * Get search cache status
+ */
+const getSearchStatus = async (req, res) => {
+  try {
+    const status = await salesService.getSearchStatus();
+    res.json({
+      success: true,
+      data: status
+    });
+  } catch (error) {
+    console.error('Error getting search status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get search status',
+      message: error.message
+    });
+  }
+};
+
 module.exports = {
   getSales,
   getFilterOptions,
   getStats,
   getFilteredStats,
-  exportSales
+  exportSales,
+  getSearchStatus
 };
