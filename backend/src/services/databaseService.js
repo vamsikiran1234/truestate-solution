@@ -297,7 +297,7 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
       // Try 1: In-memory cache FIRST (instant if loaded - most reliable)
       const cacheStatus = searchCache.getStatus();
       if (cacheStatus.isReady) {
-        matchingIds = searchCache.search(searchTerm, 200);
+        matchingIds = searchCache.search(searchTerm, 500); // Increased from 200 to 500
         if (matchingIds && matchingIds.length > 0) {
           searchMethod = 'cache';
           console.log(`[DB] Cache found ${matchingIds.length} matches`);
@@ -367,16 +367,15 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
       // Try 5: Quick scan of first 100k records using ID range (works without indexes!)
       if (!matchingIds) {
         try {
-          console.log('[DB] Using ID range scan (fallback)');
-          const searchPattern = `${searchTerm}%`;
+          console.log('[DB] Using optimized ID range scan (fallback)');
+          const searchPattern = `%${searchTerm}%`; // Changed to contains search
           
-          // Query in ID ranges to find matches quickly
-          // This uses the primary key index which always exists
-          const SCAN_SIZE = 50000;
-          const MAX_SCANS = 4; // Scan up to 200k records
+          // OPTIMIZED: Use smaller batches with LIMIT to avoid timeout
+          const SCAN_SIZE = 20000; // Reduced from 50k to 20k
+          const MAX_SCANS = 3; // Scan up to 60k records (faster)
           const foundIds = [];
           
-          for (let scan = 0; scan < MAX_SCANS && foundIds.length < 50; scan++) {
+          for (let scan = 0; scan < MAX_SCANS && foundIds.length < 100; scan++) {
             const startId = scan * SCAN_SIZE + 1;
             const endId = (scan + 1) * SCAN_SIZE;
             
@@ -385,8 +384,8 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
               .select('id')
               .gte('id', startId)
               .lte('id', endId)
-              .ilike('customer_name', searchPattern)
-              .limit(50);
+              .or(`customer_name.ilike.${searchPattern},phone_number.ilike.${searchPattern}`)
+              .limit(100);
             
             if (scanError) {
               console.log(`[DB] Scan ${scan} failed:`, scanError.message);
@@ -399,11 +398,11 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
             }
             
             // If we found enough matches, stop scanning
-            if (foundIds.length >= 50) break;
+            if (foundIds.length >= 100) break;
           }
           
           if (foundIds.length > 0) {
-            matchingIds = foundIds.slice(0, 200);
+            matchingIds = foundIds.slice(0, 500);
             searchMethod = 'id_range_scan';
             console.log(`[DB] ID range scan found ${matchingIds.length} total matches`);
           }
@@ -425,15 +424,31 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
           hasNextPage: false,
           hasPrevPage: false,
           searchStatus: 'loading',
-          message: 'Search index is being built. Please try again in 30 seconds.'
+          message: 'Search index is being built. Please try again in a moment.'
+        };
+      }
+      
+      // If no matches found after all strategies, return empty result
+      if (!matchingIds || matchingIds.length === 0) {
+        console.log('[DB] No search matches found after all strategies');
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(3);
+        return {
+          data: [],
+          totalItems: 0,
+          currentPage: 1,
+          totalPages: 0,
+          itemsPerPage: pagination.limit,
+          hasNextPage: false,
+          hasPrevPage: false
         };
       }
       
       // If we have matching IDs, query sales table with those IDs + other filters
-      if (matchingIds && matchingIds.length > 0) {
-        // Build query with ID filter and other filters
-        let query = supabase.from('sales').select('*', { count: 'exact' });
-        query = query.in('id', matchingIds);
+      console.log(`[DB] Querying sales table with ${matchingIds.length} matching IDs`);
+      
+      // Build query with ID filter and other filters
+      let query = supabase.from('sales').select('*', { count: 'exact' });
+      query = query.in('id', matchingIds);
         
         // Apply additional filters
         if (filters.regions?.length > 0) {
@@ -495,32 +510,6 @@ const getFilteredSalesFromDB = async (filters, sorting, pagination) => {
           };
         }
         console.log('[DB] Search+filters query error:', searchError.message);
-      } else if (matchingIds && matchingIds.length === 0) {
-        // No search matches found
-        console.log('[DB] No search matches found');
-        return {
-          data: [],
-          totalItems: 0,
-          currentPage: 1,
-          totalPages: 0,
-          itemsPerPage: pagination.limit,
-          hasNextPage: false,
-          hasPrevPage: false
-        };
-      }
-      
-      // Fallback: All search methods failed
-      if (!matchingIds) {
-        console.log('[DB] All search methods failed - no results');
-        return {
-          data: [],
-          totalItems: 0,
-          currentPage: 1,
-          totalPages: 0,
-          itemsPerPage: pagination.limit,
-          hasNextPage: false,
-          hasPrevPage: false
-        };
       }
     }
     
