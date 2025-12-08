@@ -1,26 +1,26 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "frontend/package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "dist"
-      }
-    },
-    {
-      "src": "api/**/*.js",
-      "use": "@vercel/node"
-    }
-  ],
+  "framework": "vite",
+  "buildCommand": "cd frontend && npm install && npm run build",
+  "outputDirectory": "frontend/dist",
+  "installCommand": "echo 'Skipping root install'",
   "routes": [
     {
       "src": "/api/(.*)",
       "dest": "/api/$1"
     },
     {
+      "src": "/(.*\\.(js|css|ico|png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|map))",
+      "dest": "/$1"
+    },
+    {
       "src": "/(.*)",
-      "dest": "/frontend/$1"
+      "dest": "/index.html"
     }
-  ]
+  ],
+  "functions": {
+    "api/*.js": {
+      "runtime": "@vercel/node@3"
+    }
+  }
 }
